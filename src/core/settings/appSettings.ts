@@ -3,6 +3,7 @@ export type SubmitShortcut = "enter" | "shift-enter";
 export interface AppSettings {
   submitShortcut: SubmitShortcut;
   lastModelId?: string;
+  customLlamaServerPath?: string;
 }
 
 export const defaultAppSettings: AppSettings = {

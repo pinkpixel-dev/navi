@@ -16,11 +16,13 @@ import { createOpenAIProvider } from "./core/providers/openAIProvider";
 import { providerModels } from "./core/providers/registry";
 import type { ChatProvider, ProviderModel } from "./core/providers/types";
 import { createDefaultLocalModelRepository, type LocalModel } from "./core/local-models/localModel";
+import { createDefaultLlamaRuntimeDriver } from "./core/local-models/llamaRuntime";
 import { loadAppSettings, saveAppSettings, type AppSettings } from "./core/settings/appSettings";
 
 const conversationRepository = createDefaultConversationRepository();
 const providerConfigRepository = createDefaultProviderConfigRepository();
 const localModelRepository = createDefaultLocalModelRepository();
+const llamaRuntimeDriver = createDefaultLlamaRuntimeDriver();
 
 function createModelsForProviderConfig(config: ProviderConfig): ProviderModel[] {
   if (config.models.length) {
@@ -75,11 +77,13 @@ function createBlankConversation(model?: ProviderModel): Conversation {
   };
 }
 
-function createSetupMessage(): ChatMessage {
+function createSetupMessage(localModel?: LocalModel): ChatMessage {
   return {
     id: crypto.randomUUID(),
     role: "assistant",
-    content: "Add or select a provider in Settings before sending a message.",
+    content: localModel
+      ? `Start "${localModel.fileName}" from Settings → Local Models before chatting.`
+      : "Add or select a provider in Settings before sending a message.",
     createdAt: new Date().toISOString(),
   };
 }
@@ -231,6 +235,17 @@ export default function App() {
       });
     }
 
+    const selectedLocalModel = localModels.find((model) => model.id === activeConversation.model);
+    if (selectedLocalModel) {
+      const runtimeStatus = await llamaRuntimeDriver.getRuntimeStatus();
+      if (runtimeStatus.state === "ready" && runtimeStatus.modelId === selectedLocalModel.id && runtimeStatus.port) {
+        return createOpenAICompatibleProvider({
+          baseUrl: `http://127.0.0.1:${runtimeStatus.port}/v1`,
+          model: selectedLocalModel.id,
+        });
+      }
+    }
+
     return null;
   };
 
@@ -278,7 +293,7 @@ export default function App() {
     setActiveRunController(controller);
     const activeProvider = await createActiveProvider();
     if (!activeProvider) {
-      const setupMessage = createSetupMessage();
+      const setupMessage = createSetupMessage(localModels.find((model) => model.id === activeConversation.model));
       const completedConversation: Conversation = {
         ...activeConversation,
         updatedAt: "Just now",

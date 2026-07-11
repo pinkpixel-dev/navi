@@ -21,3 +21,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 keyring = "3"
+ureq = "2"
+tar = "0.4"
+flate2 = "1"
+zip = "2"

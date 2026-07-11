@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { FolderOpen, KeyRound, Plus, RefreshCw, Save, Trash2, X } from "lucide-react";
+import { FolderOpen, KeyRound, Play, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createOpenAICompatibleProvider } from "../core/providers/openAICompatibleProvider";
 import { createOpenAIProvider } from "../core/providers/openAIProvider";
@@ -9,6 +9,7 @@ import {
   type ProviderType,
 } from "../core/providers/providerConfig";
 import { createDefaultLocalModelRepository, type LocalModel } from "../core/local-models/localModel";
+import { createDefaultLlamaRuntimeDriver, type LocalRuntimeStatus } from "../core/local-models/llamaRuntime";
 import type { AppSettings, SubmitShortcut } from "../core/settings/appSettings";
 
 interface SettingsPanelProps {
@@ -23,7 +24,9 @@ interface SettingsPanelProps {
 
 const providerConfigRepository = createDefaultProviderConfigRepository();
 const localModelRepository = createDefaultLocalModelRepository();
+const llamaRuntimeDriver = createDefaultLlamaRuntimeDriver();
 const isTauri = "__TAURI_INTERNALS__" in window;
+const idleRuntimeStatus: LocalRuntimeStatus = { state: "idle", port: null, modelId: null, message: null };
 
 function formatFileSize(bytes: number): string {
   if (bytes >= 1024 ** 3) {
@@ -60,10 +63,29 @@ export function SettingsPanel({
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState("Provider config is local to this app.");
   const [localModelStatus, setLocalModelStatus] = useState("Import a .gguf file to make it selectable in chat.");
+  const [runtimeStatus, setRuntimeStatus] = useState<LocalRuntimeStatus>(idleRuntimeStatus);
+  const [isRuntimeBusy, setIsRuntimeBusy] = useState(false);
 
   useEffect(() => {
     setDraftProvider((current) => providerConfigs.find((config) => config.id === current.id) ?? providerConfigs[0] ?? createDraftProvider());
   }, [providerConfigs]);
+
+  useEffect(() => {
+    if (!isTauri) {
+      return;
+    }
+    llamaRuntimeDriver.getRuntimeStatus().then(setRuntimeStatus).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri || !isRuntimeBusy) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      llamaRuntimeDriver.getRuntimeStatus().then(setRuntimeStatus).catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [isRuntimeBusy]);
 
   const updateDraft = (patch: Partial<ProviderConfig>) => {
     setDraftProvider((current) => ({ ...current, ...patch }));
@@ -172,6 +194,40 @@ export function SettingsPanel({
     await localModelRepository.removeLocalModel(id);
     onLocalModelsChange(localModels.filter((model) => model.id !== id));
     setLocalModelStatus("Model removed.");
+  };
+
+  const handleStartLocalModel = async (model: LocalModel) => {
+    setIsRuntimeBusy(true);
+    try {
+      const alreadyDownloaded = await llamaRuntimeDriver.isRuntimeDownloaded(appSettings.customLlamaServerPath);
+      if (!alreadyDownloaded) {
+        const confirmed = window.confirm("Download the llama.cpp runtime (~80MB)? This only happens once.");
+        if (!confirmed) {
+          return;
+        }
+        setLocalModelStatus("Downloading llama.cpp runtime...");
+        await llamaRuntimeDriver.downloadRuntime();
+      }
+
+      setLocalModelStatus(`Starting ${model.fileName} — this can take a while for large models...`);
+      const nextStatus = await llamaRuntimeDriver.startRuntime(model.id, model.filePath, appSettings.customLlamaServerPath);
+      setRuntimeStatus(nextStatus);
+      setLocalModelStatus(
+        nextStatus.state === "ready"
+          ? `${model.fileName} is running on port ${nextStatus.port}.`
+          : nextStatus.message ?? "Could not start the local model.",
+      );
+    } catch (error) {
+      setLocalModelStatus(error instanceof Error ? error.message : "Could not start the local model.");
+    } finally {
+      setIsRuntimeBusy(false);
+    }
+  };
+
+  const handleStopLocalModel = async () => {
+    await llamaRuntimeDriver.stopRuntime();
+    setRuntimeStatus(idleRuntimeStatus);
+    setLocalModelStatus("Local model stopped.");
   };
 
   return (
@@ -303,28 +359,56 @@ export function SettingsPanel({
                   Import GGUF model
                 </button>
               </div>
+              <label>
+                <span>Custom llama-server path (optional)</span>
+                <input
+                  value={appSettings.customLlamaServerPath ?? ""}
+                  onChange={(event) =>
+                    onAppSettingsChange({ ...appSettings, customLlamaServerPath: event.target.value || undefined })
+                  }
+                  placeholder="Skips the download if you already have llama-server installed"
+                />
+              </label>
               <p className="settings-note">
                 <KeyRound size={14} />
                 {localModelStatus}
               </p>
               {localModels.length ? (
-                localModels.map((model) => (
-                  <div className="settings-row" key={model.id}>
-                    <strong>{model.fileName}</strong>
-                    <span>
-                      {model.parseStatus === "parsed"
-                        ? [model.architecture, model.quantization, model.contextLength ? `${model.contextLength.toLocaleString()} ctx` : null]
-                            .filter(Boolean)
-                            .join(" / ")
-                        : "GGUF metadata unavailable"}
-                      {" · "}
-                      {formatFileSize(model.fileSizeBytes)}
-                    </span>
-                    <button type="button" aria-label={`Remove ${model.fileName}`} onClick={() => handleRemoveLocalModel(model.id)}>
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-                ))
+                localModels.map((model) => {
+                  const isRunning = runtimeStatus.state === "ready" && runtimeStatus.modelId === model.id;
+                  return (
+                    <div className="settings-row" key={model.id}>
+                      <strong>{model.fileName}</strong>
+                      <span>
+                        {model.parseStatus === "parsed"
+                          ? [model.architecture, model.quantization, model.contextLength ? `${model.contextLength.toLocaleString()} ctx` : null]
+                              .filter(Boolean)
+                              .join(" / ")
+                          : "GGUF metadata unavailable"}
+                        {" · "}
+                        {formatFileSize(model.fileSizeBytes)}
+                        {isRunning ? ` · running on port ${runtimeStatus.port}` : ""}
+                      </span>
+                      {isRunning ? (
+                        <button type="button" aria-label={`Stop ${model.fileName}`} onClick={handleStopLocalModel}>
+                          <Square size={14} />
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          aria-label={`Start ${model.fileName}`}
+                          disabled={isRuntimeBusy}
+                          onClick={() => handleStartLocalModel(model)}
+                        >
+                          <Play size={14} />
+                        </button>
+                      )}
+                      <button type="button" aria-label={`Remove ${model.fileName}`} onClick={() => handleRemoveLocalModel(model.id)}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  );
+                })
               ) : (
                 <div className="settings-row">
                   <strong>No local models imported</strong>

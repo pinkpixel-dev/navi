@@ -1,5 +1,6 @@
 mod credentials;
 mod gguf;
+mod llama_runtime;
 mod storage;
 
 use storage::{ConversationSnapshot, NaviStorage};
@@ -106,10 +107,41 @@ fn remove_local_model(app: AppHandle, id: String) -> Result<(), String> {
         .map_err(|error| format!("Could not remove local model: {error}"))
 }
 
+#[tauri::command]
+fn is_local_runtime_downloaded(app: AppHandle, binary_override: Option<String>) -> bool {
+    llama_runtime::is_downloaded(&app, binary_override.as_deref())
+}
+
+#[tauri::command]
+fn download_local_runtime(app: AppHandle) -> Result<(), String> {
+    llama_runtime::download_and_extract(&app)
+}
+
+#[tauri::command]
+fn start_local_runtime(
+    app: AppHandle,
+    model_id: String,
+    model_path: String,
+    binary_override: Option<String>,
+) -> Result<serde_json::Value, String> {
+    llama_runtime::start(&app, model_id, model_path, binary_override)
+}
+
+#[tauri::command]
+fn stop_local_runtime(app: AppHandle) -> Result<(), String> {
+    llama_runtime::stop(&app)
+}
+
+#[tauri::command]
+fn get_local_runtime_status(app: AppHandle) -> serde_json::Value {
+    llama_runtime::status(&app)
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .manage(llama_runtime::RuntimeState::default())
         .invoke_handler(tauri::generate_handler![
             app_status,
             save_conversation_snapshot,
@@ -120,8 +152,18 @@ pub fn run() {
             get_provider_api_key,
             import_local_model,
             load_local_models,
-            remove_local_model
+            remove_local_model,
+            is_local_runtime_downloaded,
+            download_local_runtime,
+            start_local_runtime,
+            stop_local_runtime,
+            get_local_runtime_status
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Navi");
+        .build(tauri::generate_context!())
+        .expect("error while building Navi")
+        .run(|app_handle, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit) {
+                let _ = llama_runtime::stop(app_handle);
+            }
+        });
 }
