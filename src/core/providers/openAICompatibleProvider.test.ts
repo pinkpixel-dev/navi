@@ -1,22 +1,15 @@
 import { describe, expect, test, vi } from "vitest";
 import { createOpenAICompatibleProvider } from "./openAICompatibleProvider";
 
+function sseResponse(chunks: unknown[], status = 200): Response {
+  const body = `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`;
+  return new Response(body, { status, headers: { "Content-Type": "text/event-stream" } });
+}
+
 describe("openAI compatible provider", () => {
   test("posts normalized chat messages to the chat completions endpoint", async () => {
     const fetcher = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          choices: [
-            {
-              message: {
-                role: "assistant",
-                content: "Hello from a compatible endpoint.",
-              },
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
+      sseResponse([{ choices: [{ delta: { content: "Hello from a compatible endpoint." } }] }]),
     );
     const provider = createOpenAICompatibleProvider({
       baseUrl: "http://localhost:8080/v1",
@@ -47,7 +40,7 @@ describe("openAI compatible provider", () => {
         body: JSON.stringify({
           model: "local-model",
           messages: [{ role: "user", content: "Hello" }],
-          stream: false,
+          stream: true,
         }),
       }),
     );
@@ -55,31 +48,52 @@ describe("openAI compatible provider", () => {
     expect(response.toolCalls).toEqual([]);
   });
 
+  test("streams incremental content deltas as they arrive", async () => {
+    const fetcher = vi.fn(async () =>
+      sseResponse([
+        { choices: [{ delta: { content: "Hel" } }] },
+        { choices: [{ delta: { content: "lo " } }] },
+        { choices: [{ delta: { content: "there." } }] },
+      ]),
+    );
+    const provider = createOpenAICompatibleProvider({
+      baseUrl: "https://example.com",
+      model: "hosted-model",
+      fetcher,
+    });
+
+    const deltas: string[] = [];
+    const response = await provider.complete({
+      messages: [],
+      onDelta: (delta) => deltas.push(delta),
+    });
+
+    expect(deltas).toEqual(["Hel", "lo ", "there."]);
+    expect(response.message.content).toBe("Hello there.");
+  });
+
   test("normalizes tool calls from compatible chat responses", async () => {
     const fetcher = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
+      sseResponse([
+        {
           choices: [
             {
-              message: {
-                role: "assistant",
-                content: null,
-                tool_calls: [
-                  {
-                    id: "call-1",
-                    type: "function",
-                    function: {
-                      name: "read_plan",
-                      arguments: "{\"path\":\"PLAN.md\"}",
-                    },
-                  },
-                ],
+              delta: {
+                tool_calls: [{ index: 0, id: "call-1", function: { name: "read_plan", arguments: "" } }],
               },
             },
           ],
-        }),
-        { status: 200 },
-      ),
+        },
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [{ index: 0, function: { arguments: "{\"path\":\"PLAN.md\"}" } }],
+              },
+            },
+          ],
+        },
+      ]),
     );
     const provider = createOpenAICompatibleProvider({
       baseUrl: "https://example.com",

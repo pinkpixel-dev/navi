@@ -1,4 +1,5 @@
 import type { ChatMessage, ToolCallEvent } from "../conversation/types";
+import { streamOpenAIChatCompletion, type StreamedToolCall } from "./openAIChatStream";
 import type { ChatProvider, ProviderCompleteInput, ProviderModel, ProviderResponse } from "./types";
 
 type Fetcher = typeof fetch;
@@ -10,24 +11,6 @@ interface OpenAIProviderConfig {
   model: string;
   baseUrl?: string;
   fetcher?: Fetcher;
-}
-
-interface OpenAIToolCall {
-  id?: string;
-  function?: {
-    name?: string;
-    arguments?: string;
-  };
-}
-
-interface OpenAIChatResponse {
-  choices?: Array<{
-    message?: {
-      role?: string;
-      content?: string | null;
-      tool_calls?: OpenAIToolCall[];
-    };
-  }>;
 }
 
 interface OpenAIModelsResponse {
@@ -61,7 +44,7 @@ function toolCallRisk(toolName: string): ToolCallEvent["risk"] {
   return "read";
 }
 
-function normalizeToolCall(toolCall: OpenAIToolCall): ToolCallEvent {
+function normalizeToolCall(toolCall: StreamedToolCall): ToolCallEvent {
   const toolName = toolCall.function?.name ?? "unknown_tool";
   const rawArguments = toolCall.function?.arguments ?? "{}";
 
@@ -120,32 +103,26 @@ export function createOpenAIProvider(config: OpenAIProviderConfig): ChatProvider
         }));
     },
     async complete(input: ProviderCompleteInput): Promise<ProviderResponse> {
-      const response = await fetcher(`${baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${config.apiKey}`,
-        },
-        body: JSON.stringify({
+      const result = await streamOpenAIChatCompletion({
+        fetcher,
+        url: `${baseUrl}/chat/completions`,
+        headers: { Authorization: `Bearer ${config.apiKey}` },
+        body: {
           model: config.model,
           messages: input.messages.map(toOpenAIMessage),
-          stream: false,
-        }),
+          stream: true,
+        },
         signal: input.signal,
+        errorPrefix: "OpenAI provider request failed",
+        onDelta: (delta) => input.onDelta?.(delta),
       });
 
-      if (!response.ok) {
-        throw new Error(`OpenAI provider request failed with ${response.status}: ${await response.text()}`);
-      }
-
-      const payload = (await response.json()) as OpenAIChatResponse;
-      const openAIMessage = payload.choices?.[0]?.message;
-      const toolCalls = openAIMessage?.tool_calls?.map(normalizeToolCall) ?? [];
+      const toolCalls = result.toolCalls.map(normalizeToolCall);
       const message: ChatMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
         createdAt: new Date().toISOString(),
-        content: openAIMessage?.content ?? "",
+        content: result.content,
         toolCalls,
       };
 

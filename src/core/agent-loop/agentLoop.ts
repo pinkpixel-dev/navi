@@ -178,6 +178,7 @@ export async function runAgentLoop({
   }
 
   let response;
+  let streamedAnyDelta = false;
   const maxAttempts = Math.max(1, retry.maxAttempts);
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -187,6 +188,15 @@ export async function runAgentLoop({
           providerComplete({
             messages: createProviderMessages(conversation, input),
             signal,
+            onDelta: (delta) => {
+              streamedAnyDelta = true;
+              record({
+                id: createEventId(),
+                type: "assistant_text_delta",
+                timestamp: createTimestamp(),
+                delta,
+              });
+            },
           }),
         signal,
         timeoutMs,
@@ -292,12 +302,14 @@ export async function runAgentLoop({
   }
 
   if (response.toolCalls.length === 0) {
-    record({
-      id: createEventId(),
-      type: "assistant_text_delta",
-      timestamp: createTimestamp(),
-      delta: response.message.content,
-    });
+    if (!streamedAnyDelta) {
+      record({
+        id: createEventId(),
+        type: "assistant_text_delta",
+        timestamp: createTimestamp(),
+        delta: response.message.content,
+      });
+    }
     record({
       id: createEventId(),
       type: "assistant_message_completed",
@@ -392,9 +404,10 @@ export async function runAgentLoop({
     });
   }
 
+  const toolsUsedSuffix = `\n\nTools used: ${knownTools.map((tool) => tool.label).join(", ")}.`;
   const message: ChatMessage = {
     ...response.message,
-    content: `${response.message.content}\n\nTools used: ${knownTools.map((tool) => tool.label).join(", ")}.`,
+    content: `${response.message.content}${toolsUsedSuffix}`,
     toolCalls: response.toolCalls.map((toolCall) => ({ ...toolCall, status: "completed" })),
   };
 
@@ -402,7 +415,7 @@ export async function runAgentLoop({
     id: createEventId(),
     type: "assistant_text_delta",
     timestamp: createTimestamp(),
-    delta: message.content,
+    delta: streamedAnyDelta ? toolsUsedSuffix : message.content,
   });
   record({
     id: createEventId(),

@@ -17,6 +17,7 @@ export interface ProviderResponse {
 export interface ProviderCompleteInput {
   messages: ChatMessage[];
   signal?: AbortSignal;
+  onDelta?: (delta: string) => void;
 }
 
 export interface ChatProvider {

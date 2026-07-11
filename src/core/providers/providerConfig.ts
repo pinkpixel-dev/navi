@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { ProviderModel } from "./types";
 
-export type ProviderType = "openai-compatible" | "openai";
+export type ProviderType = "openai-compatible" | "openai" | "ollama";
 
 export interface ProviderConfig {
   id: string;

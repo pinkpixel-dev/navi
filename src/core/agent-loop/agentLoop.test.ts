@@ -95,6 +95,29 @@ describe("runAgentLoop", () => {
     ]);
   });
 
+  test("emits one delta per streamed chunk without a duplicated final delta", async () => {
+    const result = await runAgentLoop({
+      conversation: testConversation,
+      input: "hello",
+      providerComplete: async (input: ProviderCompleteInput) => {
+        input.onDelta?.("Hello");
+        input.onDelta?.(" back.");
+        return createTextResponse("Hello back.");
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.events.filter((event) => event.type === "assistant_text_delta")).toHaveLength(2);
+    expect(result.events.map((event) => event.type)).toEqual([
+      "run_started",
+      "model_request_started",
+      "assistant_text_delta",
+      "assistant_text_delta",
+      "assistant_message_completed",
+      "run_completed",
+    ]);
+  });
+
   test("pauses and denies a write tool when approval policy rejects it", async () => {
     const result = await runAgentLoop({
       conversation: testConversation,

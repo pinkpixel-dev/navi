@@ -3,6 +3,7 @@ import { FolderOpen, KeyRound, Play, Plus, RefreshCw, Save, Square, Trash2, X } 
 import { open } from "@tauri-apps/plugin-dialog";
 import { createOpenAICompatibleProvider } from "../core/providers/openAICompatibleProvider";
 import { createOpenAIProvider } from "../core/providers/openAIProvider";
+import { createOllamaProvider } from "../core/providers/ollamaProvider";
 import {
   createDefaultProviderConfigRepository,
   type ProviderConfig,
@@ -102,6 +103,12 @@ export function SettingsPanel({
 
       provider = createOpenAICompatibleProvider({
         baseUrl: draftProvider.baseUrl,
+        apiKey: apiKey || undefined,
+        model: draftProvider.defaultModelId || "model",
+      });
+    } else if (draftProvider.type === "ollama") {
+      provider = createOllamaProvider({
+        baseUrl: draftProvider.baseUrl || undefined,
         apiKey: apiKey || undefined,
         model: draftProvider.defaultModelId || "model",
       });
@@ -288,14 +295,21 @@ export function SettingsPanel({
                 value={draftProvider.type}
                 onChange={(event) => {
                   const nextType = event.target.value as ProviderType;
-                  updateDraft({ type: nextType, baseUrl: nextType === "openai" ? undefined : draftProvider.baseUrl });
+                  let nextBaseUrl = draftProvider.baseUrl;
+                  if (nextType === "openai") {
+                    nextBaseUrl = undefined;
+                  } else if (nextType === "ollama" && !nextBaseUrl) {
+                    nextBaseUrl = "http://localhost:11434/v1";
+                  }
+                  updateDraft({ type: nextType, baseUrl: nextBaseUrl });
                 }}
               >
                 <option value="openai-compatible">OpenAI-compatible</option>
                 <option value="openai">OpenAI</option>
+                <option value="ollama">Ollama</option>
               </select>
             </label>
-            {draftProvider.type === "openai-compatible" ? (
+            {draftProvider.type !== "openai" ? (
               <label>
                 <span>Base URL</span>
                 <input
@@ -431,6 +445,7 @@ export function SettingsPanel({
                   <span>
                     {provider.hasApiKey ? "saved key" : "key optional"} /{" "}
                     {provider.type === "openai" ? "api.openai.com" : provider.baseUrl ?? "No endpoint URL"}
+                    {provider.type === "ollama" ? " (Ollama)" : ""}
                   </span>
                 </button>
               ))

@@ -4,14 +4,16 @@ import type { ChatProvider, ProviderCompleteInput, ProviderModel, ProviderRespon
 
 type Fetcher = typeof fetch;
 
-interface OpenAICompatibleProviderConfig {
-  baseUrl: string;
-  apiKey?: string;
+const DEFAULT_BASE_URL = "http://localhost:11434/v1";
+
+interface OllamaProviderConfig {
   model: string;
+  baseUrl?: string;
+  apiKey?: string;
   fetcher?: Fetcher;
 }
 
-interface CompatibleModelsResponse {
+interface OllamaModelsResponse {
   data?: Array<{
     id?: string;
   }>;
@@ -21,7 +23,7 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function toCompatibleMessage(message: ChatMessage) {
+function toOllamaMessage(message: ChatMessage) {
   return {
     role: message.role === "tool" ? "user" : message.role,
     content: message.content,
@@ -48,7 +50,7 @@ function normalizeToolCall(toolCall: StreamedToolCall): ToolCallEvent {
 
   return {
     id: toolCall.id ?? crypto.randomUUID(),
-    serverName: "OpenAI-compatible",
+    serverName: "Ollama",
     toolName,
     status: "queued",
     risk: toolCallRisk(toolName),
@@ -56,27 +58,28 @@ function normalizeToolCall(toolCall: StreamedToolCall): ToolCallEvent {
   };
 }
 
-function createProviderModel(config: OpenAICompatibleProviderConfig): ProviderModel {
+function createProviderModel(config: OllamaProviderConfig): ProviderModel {
   return {
     id: config.model,
     name: config.model,
-    provider: "OpenAI-compatible",
-    location: "external",
-    capabilities: ["tools", "structured-output", "canvas"],
+    provider: "Ollama",
+    location: "local",
+    capabilities: ["tools", "structured-output"],
     contextTokens: 128000,
   };
 }
 
-export function createOpenAICompatibleProvider(config: OpenAICompatibleProviderConfig): ChatProvider {
+export function createOllamaProvider(config: OllamaProviderConfig): ChatProvider {
   const fetcher = config.fetcher ?? fetch;
+  const baseUrl = normalizeBaseUrl(config.baseUrl ?? DEFAULT_BASE_URL);
   const model = createProviderModel(config);
 
   return {
-    id: "openai-compatible",
-    label: "OpenAI-compatible",
+    id: "ollama",
+    label: "Ollama",
     model,
     async listModels(): Promise<ProviderModel[]> {
-      const response = await fetcher(`${normalizeBaseUrl(config.baseUrl)}/models`, {
+      const response = await fetcher(`${baseUrl}/models`, {
         method: "GET",
         headers: {
           ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
@@ -84,33 +87,33 @@ export function createOpenAICompatibleProvider(config: OpenAICompatibleProviderC
       });
 
       if (!response.ok) {
-        throw new Error(`OpenAI-compatible model fetch failed with ${response.status}: ${await response.text()}`);
+        throw new Error(`Ollama model fetch failed with ${response.status}: ${await response.text()}`);
       }
 
-      const payload = (await response.json()) as CompatibleModelsResponse;
+      const payload = (await response.json()) as OllamaModelsResponse;
       return (payload.data ?? [])
         .filter((modelPayload) => Boolean(modelPayload.id))
         .map((modelPayload) => ({
           id: modelPayload.id ?? "",
           name: modelPayload.id ?? "",
-          provider: "OpenAI-compatible",
-          location: "external",
-          capabilities: ["tools", "structured-output", "canvas"],
+          provider: "Ollama",
+          location: "local",
+          capabilities: ["tools", "structured-output"],
           contextTokens: 128000,
         }));
     },
     async complete(input: ProviderCompleteInput): Promise<ProviderResponse> {
       const result = await streamOpenAIChatCompletion({
         fetcher,
-        url: `${normalizeBaseUrl(config.baseUrl)}/chat/completions`,
+        url: `${baseUrl}/chat/completions`,
         headers: config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {},
         body: {
           model: config.model,
-          messages: input.messages.map(toCompatibleMessage),
+          messages: input.messages.map(toOllamaMessage),
           stream: true,
         },
         signal: input.signal,
-        errorPrefix: "OpenAI-compatible provider request failed",
+        errorPrefix: "Ollama provider request failed",
         onDelta: (delta) => input.onDelta?.(delta),
       });
 

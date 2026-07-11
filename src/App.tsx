@@ -13,6 +13,7 @@ import { createDefaultConversationRepository } from "./persistence/conversationR
 import { createDefaultProviderConfigRepository, type ProviderConfig } from "./core/providers/providerConfig";
 import { createOpenAICompatibleProvider } from "./core/providers/openAICompatibleProvider";
 import { createOpenAIProvider } from "./core/providers/openAIProvider";
+import { createOllamaProvider } from "./core/providers/ollamaProvider";
 import { providerModels } from "./core/providers/registry";
 import type { ChatProvider, ProviderModel } from "./core/providers/types";
 import { createDefaultLocalModelRepository, type LocalModel } from "./core/local-models/localModel";
@@ -232,6 +233,19 @@ export default function App() {
       return createOpenAIProvider({
         apiKey,
         model: activeConversation.model || selectedOpenAIConfig.defaultModelId,
+      });
+    }
+
+    const selectedOllamaConfig = providerConfigs
+      .filter((config) => config.type === "ollama")
+      .find(matchesActiveModel);
+
+    if (selectedOllamaConfig) {
+      const apiKey = await providerConfigRepository.getProviderApiKey(selectedOllamaConfig.id);
+      return createOllamaProvider({
+        baseUrl: selectedOllamaConfig.baseUrl,
+        apiKey: apiKey ?? undefined,
+        model: activeConversation.model || selectedOllamaConfig.defaultModelId,
       });
     }
 

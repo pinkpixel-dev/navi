@@ -1,17 +1,16 @@
 import { describe, expect, test, vi } from "vitest";
-import { createOpenAIProvider } from "./openAIProvider";
+import { createOllamaProvider } from "./ollamaProvider";
 
 function sseResponse(chunks: unknown[], status = 200): Response {
   const body = `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`;
   return new Response(body, { status, headers: { "Content-Type": "text/event-stream" } });
 }
 
-describe("openAI provider", () => {
-  test("posts normalized chat messages to the OpenAI chat completions endpoint", async () => {
-    const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: { content: "Hello from OpenAI." } }] }]));
-    const provider = createOpenAIProvider({
-      apiKey: "test-key",
-      model: "gpt-4o-mini",
+describe("ollama provider", () => {
+  test("posts normalized chat messages to the local Ollama endpoint by default", async () => {
+    const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: { content: "Hi there." } }] }]));
+    const provider = createOllamaProvider({
+      model: "granite4:latest",
       fetcher,
     });
 
@@ -27,22 +26,31 @@ describe("openAI provider", () => {
     });
 
     expect(fetcher).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/chat/completions",
+      "http://localhost:11434/v1/chat/completions",
       expect.objectContaining({
         method: "POST",
-        headers: expect.objectContaining({
-          Authorization: "Bearer test-key",
-          "Content-Type": "application/json",
-        }),
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          model: "gpt-4o-mini",
+          model: "granite4:latest",
           messages: [{ role: "user", content: "Hello" }],
           stream: true,
         }),
       }),
     );
-    expect(response.message.content).toBe("Hello from OpenAI.");
+    expect(response.message.content).toBe("Hi there.");
     expect(response.toolCalls).toEqual([]);
+  });
+
+  test("does not send an Authorization header when no api key is configured", async () => {
+    const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: { content: "ok" } }] }]));
+    const provider = createOllamaProvider({ model: "granite4:latest", fetcher });
+
+    await provider.complete({ messages: [] });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ headers: expect.not.objectContaining({ Authorization: expect.anything() }) }),
+    );
   });
 
   test("streams incremental content deltas as they arrive", async () => {
@@ -53,11 +61,7 @@ describe("openAI provider", () => {
         { choices: [{ delta: { content: "there." } }] },
       ]),
     );
-    const provider = createOpenAIProvider({
-      apiKey: "test-key",
-      model: "gpt-4o-mini",
-      fetcher,
-    });
+    const provider = createOllamaProvider({ model: "granite4:latest", fetcher });
 
     const deltas: string[] = [];
     const response = await provider.complete({
@@ -69,7 +73,7 @@ describe("openAI provider", () => {
     expect(response.message.content).toBe("Hello there.");
   });
 
-  test("normalizes tool calls from OpenAI chat responses", async () => {
+  test("normalizes tool calls from Ollama chat responses", async () => {
     const fetcher = vi.fn(async () =>
       sseResponse([
         {
@@ -92,11 +96,7 @@ describe("openAI provider", () => {
         },
       ]),
     );
-    const provider = createOpenAIProvider({
-      apiKey: "test-key",
-      model: "gpt-4o-mini",
-      fetcher,
-    });
+    const provider = createOllamaProvider({ model: "granite4:latest", fetcher });
 
     const response = await provider.complete({ messages: [] });
 
@@ -109,58 +109,35 @@ describe("openAI provider", () => {
     expect(response.toolCalls[0].summary).toContain("read_plan");
   });
 
-  test("returns actionable errors for failed OpenAI requests", async () => {
-    const fetcher = vi.fn(async () => new Response("invalid api key", { status: 401 }));
-    const provider = createOpenAIProvider({
-      apiKey: "bad-key",
-      model: "gpt-4o-mini",
-      fetcher,
-    });
+  test("returns actionable errors for failed Ollama requests", async () => {
+    const fetcher = vi.fn(async () => new Response("model not found", { status: 404 }));
+    const provider = createOllamaProvider({ model: "missing-model", fetcher });
 
-    await expect(provider.complete({ messages: [] })).rejects.toThrow(
-      "OpenAI provider request failed with 401",
-    );
+    await expect(provider.complete({ messages: [] })).rejects.toThrow("Ollama provider request failed with 404");
   });
 
-  test("fetches OpenAI models", async () => {
+  test("fetches Ollama models", async () => {
     const fetcher = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          data: [{ id: "gpt-4o-mini" }, { id: "gpt-4o" }],
-        }),
-        { status: 200 },
-      ),
+      new Response(JSON.stringify({ data: [{ id: "granite4:latest" }, { id: "qwen3.5:latest" }] }), { status: 200 }),
     );
-    const provider = createOpenAIProvider({
-      apiKey: "test-key",
-      model: "gpt-4o-mini",
-      fetcher,
-    });
+    const provider = createOllamaProvider({ model: "granite4:latest", fetcher });
 
-    expect(provider.listModels).toBeDefined();
     const models = await provider.listModels?.();
 
-    expect(fetcher).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/models",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({ Authorization: "Bearer test-key" }),
-      }),
-    );
-    expect(models?.map((model) => model.id)).toEqual(["gpt-4o-mini", "gpt-4o"]);
+    expect(fetcher).toHaveBeenCalledWith("http://localhost:11434/v1/models", expect.objectContaining({ method: "GET" }));
+    expect(models?.map((model) => model.id)).toEqual(["granite4:latest", "qwen3.5:latest"]);
   });
 
   test("allows overriding the base URL", async () => {
     const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: {} }] }]));
-    const provider = createOpenAIProvider({
-      apiKey: "test-key",
-      model: "gpt-4o-mini",
-      baseUrl: "https://proxy.example.com/v1/",
+    const provider = createOllamaProvider({
+      model: "granite4:latest",
+      baseUrl: "http://192.168.1.50:11434/v1/",
       fetcher,
     });
 
     await provider.complete({ messages: [] });
 
-    expect(fetcher).toHaveBeenCalledWith("https://proxy.example.com/v1/chat/completions", expect.anything());
+    expect(fetcher).toHaveBeenCalledWith("http://192.168.1.50:11434/v1/chat/completions", expect.anything());
   });
 });
