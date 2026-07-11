@@ -12,6 +12,8 @@ export interface ProviderConfig {
   models: ProviderModel[];
   hasApiKey: boolean;
   apiKey?: string;
+  /** Model ids to show in the chat model picker. Undefined/absent means all fetched models are shown. */
+  enabledModelIds?: string[];
 }
 
 export interface ProviderConfigDriver {

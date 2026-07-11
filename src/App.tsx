@@ -49,6 +49,15 @@ function createModelsForProviderConfig(config: ProviderConfig): ProviderModel[] 
   ];
 }
 
+function createPickerModelsForProviderConfig(config: ProviderConfig): ProviderModel[] {
+  const models = createModelsForProviderConfig(config);
+  if (!config.enabledModelIds) {
+    return models;
+  }
+  const enabledIds = new Set(config.enabledModelIds);
+  return models.filter((model) => enabledIds.has(model.id));
+}
+
 function pickPreferredModel(models: ProviderModel[], lastModelId?: string): ProviderModel {
   return models.find((model) => model.id === lastModelId) ?? models[0];
 }
@@ -114,7 +123,7 @@ export default function App() {
   const availableModels = useMemo(
     () => [
       ...providerModels,
-      ...providerConfigs.flatMap(createModelsForProviderConfig),
+      ...providerConfigs.flatMap(createPickerModelsForProviderConfig),
       ...localModels.map(createModelFromLocalModel),
     ],
     [providerConfigs, localModels],
@@ -271,7 +280,8 @@ export default function App() {
 
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
-    saveConversationSnapshot(conversation).catch((error: unknown) => {
+    dispatchRunState({ type: "reset" });
+    saveConversationSnapshot(conversation, [], []).catch((error: unknown) => {
       console.error("Could not save new conversation", error);
     });
   };

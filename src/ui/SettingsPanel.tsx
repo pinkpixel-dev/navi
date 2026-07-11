@@ -114,6 +114,7 @@ export function SettingsPanel({
   const [draftProvider, setDraftProvider] = useState<ProviderConfig>(providerConfigs[0] ?? createDraftProvider());
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState("Provider config is local to this app.");
+  const [modelFilterText, setModelFilterText] = useState("");
   const [localModelStatus, setLocalModelStatus] = useState("Import a .gguf file to make it selectable in chat.");
   const [runtimeStatus, setRuntimeStatus] = useState<LocalRuntimeStatus>(idleRuntimeStatus);
   const [isRuntimeBusy, setIsRuntimeBusy] = useState(false);
@@ -167,6 +168,24 @@ export function SettingsPanel({
     setDraftProvider((current) => ({ ...current, ...patch }));
   };
 
+  const handleToggleModelEnabled = (modelId: string) => {
+    setDraftProvider((current) => {
+      const allIds = current.models.map((model) => model.id);
+      const currentlyEnabled = current.enabledModelIds ?? allIds;
+      const nextEnabled = currentlyEnabled.includes(modelId)
+        ? currentlyEnabled.filter((id) => id !== modelId)
+        : [...currentlyEnabled, modelId];
+      return { ...current, enabledModelIds: nextEnabled };
+    });
+  };
+
+  const handleSetAllModelsEnabled = (enabled: boolean) => {
+    setDraftProvider((current) => ({
+      ...current,
+      enabledModelIds: enabled ? undefined : [],
+    }));
+  };
+
   const handleFetchModels = async () => {
     let provider: ReturnType<typeof createOpenAICompatibleProvider>;
 
@@ -207,7 +226,7 @@ export function SettingsPanel({
       }
 
       updateDraft({ models });
-      setStatus(`Fetched ${models.length} model${models.length === 1 ? "" : "s"}. All of them are selectable from the chat model picker.`);
+      setStatus(`Fetched ${models.length} model${models.length === 1 ? "" : "s"}. Uncheck any you don't want in the chat model picker below.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not fetch models.");
     }
@@ -518,6 +537,39 @@ export function SettingsPanel({
               <KeyRound size={14} />
               {status}
             </p>
+            {draftProvider.models.length ? (
+              <>
+                <label>
+                  <span>Filter models shown in the chat picker</span>
+                  <input
+                    value={modelFilterText}
+                    onChange={(event) => setModelFilterText(event.target.value)}
+                    placeholder="Search fetched models..."
+                  />
+                </label>
+                <div className="settings-actions">
+                  <button type="button" onClick={() => handleSetAllModelsEnabled(true)}>
+                    Show all
+                  </button>
+                  <button type="button" onClick={() => handleSetAllModelsEnabled(false)}>
+                    Hide all
+                  </button>
+                </div>
+                <div className="settings-model-list">
+                  {draftProvider.models
+                    .filter((model) => model.name.toLowerCase().includes(modelFilterText.toLowerCase()))
+                    .map((model) => {
+                      const isEnabled = !draftProvider.enabledModelIds || draftProvider.enabledModelIds.includes(model.id);
+                      return (
+                        <label className="settings-model-checkbox" key={model.id}>
+                          <input type="checkbox" checked={isEnabled} onChange={() => handleToggleModelEnabled(model.id)} />
+                          <span>{model.name}</span>
+                        </label>
+                      );
+                    })}
+                </div>
+              </>
+            ) : null}
           </form>
           {isTauri ? (
             <div>

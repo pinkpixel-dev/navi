@@ -1,4 +1,4 @@
-import { FormEvent, KeyboardEvent, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { PanelRightOpen, Send, Square } from "lucide-react";
 import type { Conversation } from "../core/conversation/types";
 import type { ChatRunState } from "../core/chat-state/chatRunReducer";
@@ -31,6 +31,43 @@ export function ChatWorkspace({
   onSend,
 }: ChatWorkspaceProps) {
   const [draft, setDraft] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState(
+    () => availableModels.find((model) => model.id === conversation.model)?.provider ?? "",
+  );
+
+  const providerNames = useMemo(() => {
+    const seen = new Set<string>();
+    const names: string[] = [];
+    for (const model of availableModels) {
+      if (!seen.has(model.provider)) {
+        seen.add(model.provider);
+        names.push(model.provider);
+      }
+    }
+    return names;
+  }, [availableModels]);
+
+  useEffect(() => {
+    const activeModelProvider = availableModels.find((model) => model.id === conversation.model)?.provider;
+    if (activeModelProvider) {
+      setSelectedProvider(activeModelProvider);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversation.id]);
+
+  const effectiveProvider = providerNames.includes(selectedProvider) ? selectedProvider : providerNames[0] ?? "";
+  const modelsForProvider = useMemo(
+    () => availableModels.filter((model) => model.provider === effectiveProvider),
+    [availableModels, effectiveProvider],
+  );
+
+  const handleProviderChange = (providerName: string) => {
+    setSelectedProvider(providerName);
+    const firstModel = availableModels.find((model) => model.provider === providerName);
+    if (firstModel) {
+      onModelChange(firstModel);
+    }
+  };
 
   const submitDraft = () => {
     if (isRunning) {
@@ -69,19 +106,32 @@ export function ChatWorkspace({
           <div className="workspace-meta">
             <span>{conversation.projectName}</span>
             <select
+              aria-label="Active provider"
+              value={effectiveProvider}
+              disabled={!providerNames.length}
+              onChange={(event) => handleProviderChange(event.target.value)}
+            >
+              {!providerNames.length ? <option value="">No providers</option> : null}
+              {providerNames.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+            <select
               aria-label="Active model"
               value={conversation.model}
-              disabled={!availableModels.length}
+              disabled={!modelsForProvider.length}
               onChange={(event) => {
-                const nextModel = availableModels.find((model) => model.id === event.target.value);
+                const nextModel = modelsForProvider.find((model) => model.id === event.target.value);
                 if (nextModel) {
                   onModelChange(nextModel);
                 }
               }}
             >
-              {!availableModels.length ? <option value="">No providers</option> : null}
-              {availableModels.map((model) => (
-                <option key={`${model.provider}-${model.id}`} value={model.id}>
+              {!modelsForProvider.length ? <option value="">No models</option> : null}
+              {modelsForProvider.map((model) => (
+                <option key={model.id} value={model.id}>
                   {model.name}
                 </option>
               ))}
