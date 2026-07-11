@@ -1,9 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
 import { KeyRound, Plus, RefreshCw, Save, X } from "lucide-react";
 import { createOpenAICompatibleProvider } from "../core/providers/openAICompatibleProvider";
+import { createOpenAIProvider } from "../core/providers/openAIProvider";
 import {
   createDefaultProviderConfigRepository,
   type ProviderConfig,
+  type ProviderType,
 } from "../core/providers/providerConfig";
 import type { AppSettings, SubmitShortcut } from "../core/settings/appSettings";
 
@@ -49,16 +51,30 @@ export function SettingsPanel({
   };
 
   const handleFetchModels = async () => {
-    if (draftProvider.type !== "openai-compatible" || !draftProvider.baseUrl) {
-      setStatus("Model fetching is only available for compatible endpoints right now.");
-      return;
-    }
+    let provider: ReturnType<typeof createOpenAICompatibleProvider>;
 
-    const provider = createOpenAICompatibleProvider({
-      baseUrl: draftProvider.baseUrl,
-      apiKey: apiKey || undefined,
-      model: draftProvider.defaultModelId || "model",
-    });
+    if (draftProvider.type === "openai-compatible") {
+      if (!draftProvider.baseUrl) {
+        setStatus("Add a base URL before fetching models.");
+        return;
+      }
+
+      provider = createOpenAICompatibleProvider({
+        baseUrl: draftProvider.baseUrl,
+        apiKey: apiKey || undefined,
+        model: draftProvider.defaultModelId || "model",
+      });
+    } else {
+      if (!apiKey && !draftProvider.hasApiKey) {
+        setStatus("Add an API key before fetching models.");
+        return;
+      }
+
+      provider = createOpenAIProvider({
+        apiKey: apiKey || (await providerConfigRepository.getProviderApiKey(draftProvider.id)) || "",
+        model: draftProvider.defaultModelId || "gpt-4o-mini",
+      });
+    }
 
     try {
       const models = await provider.listModels?.();
@@ -166,30 +182,41 @@ export function SettingsPanel({
             </label>
             <label>
               <span>Type</span>
-              <select value={draftProvider.type} onChange={() => updateDraft({ type: "openai-compatible" })}>
+              <select
+                value={draftProvider.type}
+                onChange={(event) => {
+                  const nextType = event.target.value as ProviderType;
+                  updateDraft({ type: nextType, baseUrl: nextType === "openai" ? undefined : draftProvider.baseUrl });
+                }}
+              >
                 <option value="openai-compatible">OpenAI-compatible</option>
+                <option value="openai">OpenAI</option>
               </select>
             </label>
             {draftProvider.type === "openai-compatible" ? (
-              <>
-                <label>
-                  <span>Base URL</span>
-                  <input
-                    value={draftProvider.baseUrl ?? ""}
-                    onChange={(event) => updateDraft({ baseUrl: event.target.value })}
-                  />
-                </label>
-                <label>
-                  <span>API key (optional)</span>
-                  <input
-                    type="password"
-                    value={apiKey}
-                    placeholder={draftProvider.hasApiKey ? "Saved key available" : "No key required for some endpoints"}
-                    onChange={(event) => setApiKey(event.target.value)}
-                  />
-                </label>
-              </>
+              <label>
+                <span>Base URL</span>
+                <input
+                  value={draftProvider.baseUrl ?? ""}
+                  onChange={(event) => updateDraft({ baseUrl: event.target.value })}
+                />
+              </label>
             ) : null}
+            <label>
+              <span>API key{draftProvider.type === "openai" ? "" : " (optional)"}</span>
+              <input
+                type="password"
+                value={apiKey}
+                placeholder={
+                  draftProvider.hasApiKey
+                    ? "Saved key available"
+                    : draftProvider.type === "openai"
+                    ? "Required for api.openai.com"
+                    : "No key required for some endpoints"
+                }
+                onChange={(event) => setApiKey(event.target.value)}
+              />
+            </label>
             <label>
               <span>Default model</span>
               <input
@@ -244,7 +271,10 @@ export function SettingsPanel({
                   onClick={() => handleSelectProvider(provider.id)}
                 >
                   <strong>{provider.name}</strong>
-                  <span>{provider.hasApiKey ? "saved key" : "key optional"} / {provider.baseUrl ?? "No endpoint URL"}</span>
+                  <span>
+                    {provider.hasApiKey ? "saved key" : "key optional"} /{" "}
+                    {provider.type === "openai" ? "api.openai.com" : provider.baseUrl ?? "No endpoint URL"}
+                  </span>
                 </button>
               ))
             ) : (

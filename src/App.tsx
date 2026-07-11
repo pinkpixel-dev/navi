@@ -12,6 +12,7 @@ import { createArtifactFromMessage } from "./canvas/artifacts";
 import { createDefaultConversationRepository } from "./persistence/conversationRepository";
 import { createDefaultProviderConfigRepository, type ProviderConfig } from "./core/providers/providerConfig";
 import { createOpenAICompatibleProvider } from "./core/providers/openAICompatibleProvider";
+import { createOpenAIProvider } from "./core/providers/openAIProvider";
 import { providerModels } from "./core/providers/registry";
 import type { ChatProvider, ProviderModel } from "./core/providers/types";
 import { loadAppSettings, saveAppSettings, type AppSettings } from "./core/settings/appSettings";
@@ -159,32 +160,47 @@ export default function App() {
     });
   };
 
+  const matchesActiveModel = (config: ProviderConfig) =>
+    config.defaultModelId === activeConversation.model ||
+    createModelsForProviderConfig(config).some((model) => model.id === activeConversation.model);
+
   const createActiveProvider = async (): Promise<ChatProvider | null> => {
     const compatibleConfigs = providerConfigs.filter((config) => config.type === "openai-compatible");
-    const providerConfig = compatibleConfigs.find(
-      (config) =>
-        config.defaultModelId === activeConversation.model ||
-        createModelsForProviderConfig(config).some((model) => model.id === activeConversation.model),
-    );
-    const selectedProviderConfig =
-      providerConfig ??
+    const selectedCompatibleConfig =
+      compatibleConfigs.find(matchesActiveModel) ??
       (activeConversation.model === "openai-compatible-placeholder" && compatibleConfigs.length === 1
         ? compatibleConfigs[0]
         : undefined);
 
-    if (!selectedProviderConfig?.baseUrl) {
-      return null;
+    if (selectedCompatibleConfig?.baseUrl) {
+      const apiKey = await providerConfigRepository.getProviderApiKey(selectedCompatibleConfig.id);
+      return createOpenAICompatibleProvider({
+        baseUrl: selectedCompatibleConfig.baseUrl,
+        apiKey: apiKey ?? undefined,
+        model:
+          activeConversation.model === "openai-compatible-placeholder"
+            ? selectedCompatibleConfig.defaultModelId
+            : activeConversation.model || selectedCompatibleConfig.defaultModelId,
+      });
     }
 
-    const apiKey = await providerConfigRepository.getProviderApiKey(selectedProviderConfig.id);
-    return createOpenAICompatibleProvider({
-      baseUrl: selectedProviderConfig.baseUrl,
-      apiKey: apiKey ?? undefined,
-      model:
-        activeConversation.model === "openai-compatible-placeholder"
-          ? selectedProviderConfig.defaultModelId
-          : activeConversation.model || selectedProviderConfig.defaultModelId,
-    });
+    const selectedOpenAIConfig = providerConfigs
+      .filter((config) => config.type === "openai")
+      .find(matchesActiveModel);
+
+    if (selectedOpenAIConfig) {
+      const apiKey = await providerConfigRepository.getProviderApiKey(selectedOpenAIConfig.id);
+      if (!apiKey) {
+        return null;
+      }
+
+      return createOpenAIProvider({
+        apiKey,
+        model: activeConversation.model || selectedOpenAIConfig.defaultModelId,
+      });
+    }
+
+    return null;
   };
 
   const handleNewChat = () => {
