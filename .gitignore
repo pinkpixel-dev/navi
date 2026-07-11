@@ -1,0 +1,17 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+*.log
+.DS_Store
+
+.agents/
+.claude/
+.codex/
+
+CHANGELOG.md
+ERRORS.md
+MEMORY.md
+OVERVIEW.md
+PLAN.md
+ROADMAP.md
