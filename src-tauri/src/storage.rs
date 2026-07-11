@@ -114,6 +114,14 @@ impl NaviStorage {
                 payload_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS mcp_servers (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                transport TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                payload_json TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
             CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation_id ON tool_calls(conversation_id);
             CREATE INDEX IF NOT EXISTS idx_run_events_conversation_id ON run_events(conversation_id);
@@ -331,6 +339,59 @@ impl NaviStorage {
 
     pub fn delete_local_model(&self, id: &str) -> rusqlite::Result<()> {
         self.conn.execute("DELETE FROM local_models WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn save_mcp_server(&self, server: &Value) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "
+            INSERT INTO mcp_servers (
+                id,
+                name,
+                transport,
+                enabled,
+                payload_json
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                transport = excluded.transport,
+                enabled = excluded.enabled,
+                payload_json = excluded.payload_json
+            ",
+            params![
+                string_at(server, "id"),
+                string_at(server, "name"),
+                string_at(server, "transport"),
+                bool_at(server, "enabled") as i64,
+                server.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_mcp_servers(&self) -> rusqlite::Result<Vec<Value>> {
+        let mut statement = self.conn.prepare(
+            "
+            SELECT payload_json
+            FROM mcp_servers
+            ORDER BY rowid DESC
+            ",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut servers = Vec::new();
+
+        for row in rows {
+            let value = serde_json::from_str(&row?)
+                .map_err(|error| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, error.into()))?;
+            servers.push(value);
+        }
+
+        Ok(servers)
+    }
+
+    pub fn delete_mcp_server(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn.execute("DELETE FROM mcp_servers WHERE id = ?1", params![id])?;
         Ok(())
     }
 
@@ -594,5 +655,29 @@ mod tests {
         storage.delete_local_model("model-1").expect("model should delete");
         let models = storage.load_local_models().expect("models should load");
         assert_eq!(models.len(), 0);
+    }
+
+    #[test]
+    fn saves_loads_and_deletes_mcp_servers() {
+        let storage = NaviStorage::open_in_memory().expect("storage should open");
+        let server = serde_json::json!({
+            "id": "server-1",
+            "name": "Everything",
+            "transport": "stdio",
+            "enabled": true,
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-everything"]
+        });
+
+        storage.save_mcp_server(&server).expect("server should save");
+
+        let servers = storage.load_mcp_servers().expect("servers should load");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0]["name"], "Everything");
+        assert_eq!(servers[0]["transport"], "stdio");
+
+        storage.delete_mcp_server("server-1").expect("server should delete");
+        let servers = storage.load_mcp_servers().expect("servers should load");
+        assert_eq!(servers.len(), 0);
     }
 }

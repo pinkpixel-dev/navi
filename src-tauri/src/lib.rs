@@ -1,6 +1,7 @@
 mod credentials;
 mod gguf;
 mod llama_runtime;
+mod mcp_client;
 mod storage;
 
 use storage::{ConversationSnapshot, NaviStorage};
@@ -137,11 +138,54 @@ fn get_local_runtime_status(app: AppHandle) -> serde_json::Value {
     llama_runtime::status(&app)
 }
 
+#[tauri::command]
+fn save_mcp_server(app: AppHandle, config: mcp_client::McpServerConfig) -> Result<(), String> {
+    let value = serde_json::to_value(&config).map_err(|error| format!("Could not encode MCP server config: {error}"))?;
+    storage_for_app(&app)?
+        .save_mcp_server(&value)
+        .map_err(|error| format!("Could not save MCP server: {error}"))
+}
+
+#[tauri::command]
+fn load_mcp_servers(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    storage_for_app(&app)?
+        .load_mcp_servers()
+        .map_err(|error| format!("Could not load MCP servers: {error}"))
+}
+
+#[tauri::command]
+fn remove_mcp_server(app: AppHandle, id: String) -> Result<(), String> {
+    storage_for_app(&app)?
+        .delete_mcp_server(&id)
+        .map_err(|error| format!("Could not remove MCP server: {error}"))
+}
+
+#[tauri::command]
+async fn test_mcp_connection(config: mcp_client::McpServerConfig) -> Result<serde_json::Value, String> {
+    mcp_client::test_connection(config).await
+}
+
+#[tauri::command]
+async fn connect_mcp_server(app: AppHandle, config: mcp_client::McpServerConfig) -> Result<serde_json::Value, String> {
+    mcp_client::connect(&app, config).await
+}
+
+#[tauri::command]
+async fn disconnect_mcp_server(app: AppHandle, id: String) -> Result<(), String> {
+    mcp_client::disconnect(&app, &id).await
+}
+
+#[tauri::command]
+async fn get_mcp_server_status(app: AppHandle, id: String) -> serde_json::Value {
+    mcp_client::status(&app, &id).await
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(llama_runtime::RuntimeState::default())
+        .manage(mcp_client::McpManagerState::default())
         .invoke_handler(tauri::generate_handler![
             app_status,
             save_conversation_snapshot,
@@ -157,7 +201,14 @@ pub fn run() {
             download_local_runtime,
             start_local_runtime,
             stop_local_runtime,
-            get_local_runtime_status
+            get_local_runtime_status,
+            save_mcp_server,
+            load_mcp_servers,
+            remove_mcp_server,
+            test_mcp_connection,
+            connect_mcp_server,
+            disconnect_mcp_server,
+            get_mcp_server_status
         ])
         .build(tauri::generate_context!())
         .expect("error while building Navi")

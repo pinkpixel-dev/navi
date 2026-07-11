@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { FolderOpen, KeyRound, Play, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
+import { FolderOpen, KeyRound, Play, Plug, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createOpenAICompatibleProvider } from "../core/providers/openAICompatibleProvider";
 import { createOpenAIProvider } from "../core/providers/openAIProvider";
@@ -11,6 +11,12 @@ import {
 } from "../core/providers/providerConfig";
 import { createDefaultLocalModelRepository, type LocalModel } from "../core/local-models/localModel";
 import { createDefaultLlamaRuntimeDriver, type LocalRuntimeStatus } from "../core/local-models/llamaRuntime";
+import {
+  createDefaultMcpServerDriver,
+  type McpServerConfig,
+  type McpServerStatus,
+  type McpTransport,
+} from "../core/mcp/mcpServer";
 import type { AppSettings, SubmitShortcut } from "../core/settings/appSettings";
 
 interface SettingsPanelProps {
@@ -26,8 +32,53 @@ interface SettingsPanelProps {
 const providerConfigRepository = createDefaultProviderConfigRepository();
 const localModelRepository = createDefaultLocalModelRepository();
 const llamaRuntimeDriver = createDefaultLlamaRuntimeDriver();
+const mcpServerDriver = createDefaultMcpServerDriver();
 const isTauri = "__TAURI_INTERNALS__" in window;
 const idleRuntimeStatus: LocalRuntimeStatus = { state: "idle", port: null, modelId: null, message: null };
+
+function createDraftMcpServer(): McpServerConfig {
+  return {
+    id: crypto.randomUUID(),
+    name: "New server",
+    enabled: true,
+    transport: "stdio",
+    command: "",
+    url: "",
+  };
+}
+
+function parseArgsText(text: string): string[] {
+  return text
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function parseKeyValueLines(text: string, separator: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const index = trimmed.indexOf(separator);
+    if (index === -1) {
+      continue;
+    }
+    const key = trimmed.slice(0, index).trim();
+    const value = trimmed.slice(index + separator.length).trim();
+    if (key) {
+      result[key] = value;
+    }
+  }
+  return result;
+}
+
+function formatKeyValueLines(record: Record<string, string> | undefined, separator: string): string {
+  return Object.entries(record ?? {})
+    .map(([key, value]) => `${key}${separator}${value}`)
+    .join("\n");
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes >= 1024 ** 3) {
@@ -66,10 +117,34 @@ export function SettingsPanel({
   const [localModelStatus, setLocalModelStatus] = useState("Import a .gguf file to make it selectable in chat.");
   const [runtimeStatus, setRuntimeStatus] = useState<LocalRuntimeStatus>(idleRuntimeStatus);
   const [isRuntimeBusy, setIsRuntimeBusy] = useState(false);
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
+  const [draftMcpServer, setDraftMcpServer] = useState<McpServerConfig>(createDraftMcpServer());
+  const [mcpArgsText, setMcpArgsText] = useState("");
+  const [mcpEnvText, setMcpEnvText] = useState("");
+  const [mcpHeadersText, setMcpHeadersText] = useState("");
+  const [mcpStatus, setMcpStatus] = useState("Add a server to see its tools.");
+  const [mcpTestResult, setMcpTestResult] = useState<McpServerStatus | null>(null);
+  const [mcpConnections, setMcpConnections] = useState<Record<string, McpServerStatus>>({});
 
   useEffect(() => {
     setDraftProvider((current) => providerConfigs.find((config) => config.id === current.id) ?? providerConfigs[0] ?? createDraftProvider());
   }, [providerConfigs]);
+
+  useEffect(() => {
+    if (!isTauri) {
+      return;
+    }
+    mcpServerDriver
+      .loadServers()
+      .then(async (servers) => {
+        setMcpServers(servers);
+        const statuses = await Promise.all(
+          servers.map(async (server) => [server.id, await mcpServerDriver.getServerStatus(server.id)] as const),
+        );
+        setMcpConnections(Object.fromEntries(statuses.filter(([, status]) => status.state === "connected")));
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!isTauri) {
@@ -235,6 +310,90 @@ export function SettingsPanel({
     await llamaRuntimeDriver.stopRuntime();
     setRuntimeStatus(idleRuntimeStatus);
     setLocalModelStatus("Local model stopped.");
+  };
+
+  const buildMcpConfigFromDraft = (): McpServerConfig => ({
+    ...draftMcpServer,
+    args: draftMcpServer.transport === "stdio" ? parseArgsText(mcpArgsText) : undefined,
+    env: draftMcpServer.transport === "stdio" ? parseKeyValueLines(mcpEnvText, "=") : undefined,
+    headers: draftMcpServer.transport === "http" ? parseKeyValueLines(mcpHeadersText, ":") : undefined,
+  });
+
+  const handleTestMcpConnection = async () => {
+    setMcpStatus("Testing connection...");
+    setMcpTestResult(null);
+    try {
+      const config = buildMcpConfigFromDraft();
+      const result = await mcpServerDriver.testConnection(config);
+      setMcpTestResult(result);
+      setMcpStatus(`Connected. Found ${result.tools.length} tool${result.tools.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setMcpStatus(error instanceof Error ? error.message : "Could not connect to this server.");
+    }
+  };
+
+  const handleSaveMcpServer = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const config = buildMcpConfigFromDraft();
+    await mcpServerDriver.saveServer(config);
+    setMcpServers((current) => [config, ...current.filter((server) => server.id !== config.id)]);
+    setDraftMcpServer(config);
+    setMcpStatus("Server saved.");
+  };
+
+  const handleSelectMcpServer = (id: string) => {
+    if (id === "new") {
+      setDraftMcpServer(createDraftMcpServer());
+      setMcpArgsText("");
+      setMcpEnvText("");
+      setMcpHeadersText("");
+      setMcpTestResult(null);
+      setMcpStatus("New server draft.");
+      return;
+    }
+
+    const server = mcpServers.find((item) => item.id === id);
+    if (server) {
+      setDraftMcpServer(server);
+      setMcpArgsText((server.args ?? []).join(" "));
+      setMcpEnvText(formatKeyValueLines(server.env, "="));
+      setMcpHeadersText(formatKeyValueLines(server.headers, ": "));
+      setMcpTestResult(null);
+      setMcpStatus(mcpConnections[id] ? "Connected." : "Not connected.");
+    }
+  };
+
+  const handleRemoveMcpServer = async (id: string) => {
+    await mcpServerDriver.disconnectServer(id).catch(() => {});
+    await mcpServerDriver.removeServer(id);
+    setMcpServers((current) => current.filter((server) => server.id !== id));
+    setMcpConnections((current) => {
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+    setMcpStatus("Server removed.");
+  };
+
+  const handleConnectMcpServer = async (server: McpServerConfig) => {
+    setMcpStatus(`Connecting to ${server.name}...`);
+    try {
+      const result = await mcpServerDriver.connectServer(server);
+      setMcpConnections((current) => ({ ...current, [server.id]: result }));
+      setMcpStatus(`${server.name}: ${result.tools.length} tool${result.tools.length === 1 ? "" : "s"} available.`);
+    } catch (error) {
+      setMcpStatus(error instanceof Error ? error.message : `Could not connect to ${server.name}.`);
+    }
+  };
+
+  const handleDisconnectMcpServer = async (server: McpServerConfig) => {
+    await mcpServerDriver.disconnectServer(server.id);
+    setMcpConnections((current) => {
+      const next = { ...current };
+      delete next[server.id];
+      return next;
+    });
+    setMcpStatus(`${server.name} disconnected.`);
   };
 
   return (
@@ -430,6 +589,154 @@ export function SettingsPanel({
                 </div>
               )}
             </div>
+          ) : null}
+          {isTauri ? (
+            <form className="settings-form" onSubmit={handleSaveMcpServer}>
+              <h3>MCP Servers</h3>
+              <label>
+                <span>Editing</span>
+                <select
+                  value={mcpServers.some((server) => server.id === draftMcpServer.id) ? draftMcpServer.id : "new"}
+                  onChange={(event) => handleSelectMcpServer(event.target.value)}
+                >
+                  <option value="new">New server</option>
+                  {mcpServers.map((server) => (
+                    <option key={server.id} value={server.id}>
+                      {server.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Name</span>
+                <input
+                  value={draftMcpServer.name}
+                  onChange={(event) => setDraftMcpServer((current) => ({ ...current, name: event.target.value }))}
+                />
+              </label>
+              <label>
+                <span>Transport</span>
+                <select
+                  value={draftMcpServer.transport}
+                  onChange={(event) =>
+                    setDraftMcpServer((current) => ({ ...current, transport: event.target.value as McpTransport }))
+                  }
+                >
+                  <option value="stdio">Stdio</option>
+                  <option value="http">Streamable HTTP</option>
+                </select>
+              </label>
+              {draftMcpServer.transport === "stdio" ? (
+                <>
+                  <label>
+                    <span>Command</span>
+                    <input
+                      value={draftMcpServer.command ?? ""}
+                      onChange={(event) => setDraftMcpServer((current) => ({ ...current, command: event.target.value }))}
+                      placeholder="npx"
+                    />
+                  </label>
+                  <label>
+                    <span>Arguments</span>
+                    <input
+                      value={mcpArgsText}
+                      onChange={(event) => setMcpArgsText(event.target.value)}
+                      placeholder="-y @modelcontextprotocol/server-everything"
+                    />
+                  </label>
+                  <label>
+                    <span>Working directory (optional)</span>
+                    <input
+                      value={draftMcpServer.cwd ?? ""}
+                      onChange={(event) => setDraftMcpServer((current) => ({ ...current, cwd: event.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    <span>Environment variables (optional, one KEY=VALUE per line)</span>
+                    <textarea
+                      value={mcpEnvText}
+                      onChange={(event) => setMcpEnvText(event.target.value)}
+                      rows={3}
+                    />
+                  </label>
+                </>
+              ) : (
+                <>
+                  <label>
+                    <span>URL</span>
+                    <input
+                      value={draftMcpServer.url ?? ""}
+                      onChange={(event) => setDraftMcpServer((current) => ({ ...current, url: event.target.value }))}
+                      placeholder="http://localhost:3001/mcp"
+                    />
+                  </label>
+                  <label>
+                    <span>Headers (optional, one Key: Value per line)</span>
+                    <textarea
+                      value={mcpHeadersText}
+                      onChange={(event) => setMcpHeadersText(event.target.value)}
+                      rows={3}
+                    />
+                  </label>
+                </>
+              )}
+              <div className="settings-actions">
+                <button type="button" onClick={handleTestMcpConnection}>
+                  <Plug size={15} />
+                  Test connection
+                </button>
+                <button type="submit">
+                  <Save size={15} />
+                  Save server
+                </button>
+                <button type="button" onClick={() => handleSelectMcpServer("new")}>
+                  <Plus size={15} />
+                  New server
+                </button>
+              </div>
+              <p className="settings-note">
+                <KeyRound size={14} />
+                {mcpStatus}
+              </p>
+              {mcpTestResult ? (
+                <div className="settings-row">
+                  <strong>{mcpTestResult.tools.length} tool{mcpTestResult.tools.length === 1 ? "" : "s"} discovered</strong>
+                  <span>{mcpTestResult.tools.map((tool) => tool.name).join(", ") || "No tools reported."}</span>
+                </div>
+              ) : null}
+              {mcpServers.length ? (
+                mcpServers.map((server) => {
+                  const connection = mcpConnections[server.id];
+                  const isConnected = connection?.state === "connected";
+                  return (
+                    <div className="settings-row" key={server.id}>
+                      <strong>{server.name}</strong>
+                      <span>
+                        {server.transport === "stdio" ? server.command : server.url}
+                        {isConnected ? ` · ${connection.tools.length} tool${connection.tools.length === 1 ? "" : "s"}` : " · not connected"}
+                      </span>
+                      {isConnected ? (
+                        <button type="button" aria-label={`Disconnect ${server.name}`} onClick={() => handleDisconnectMcpServer(server)}>
+                          <Square size={14} />
+                        </button>
+                      ) : (
+                        <button type="button" aria-label={`Connect ${server.name}`} onClick={() => handleConnectMcpServer(server)}>
+                          <Plug size={14} />
+                        </button>
+                      )}
+                      <button type="button" aria-label={`Remove ${server.name}`} onClick={() => handleRemoveMcpServer(server.id)}>
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="settings-row">
+                  <strong>No MCP servers saved</strong>
+                  <span>Add a stdio or Streamable HTTP server to give the model real tools.</span>
+                </div>
+              )}
+            </form>
           ) : null}
           <div>
             <h3>Providers</h3>
