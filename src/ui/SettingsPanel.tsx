@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
-import { KeyRound, Plus, RefreshCw, Save, X } from "lucide-react";
+import { FolderOpen, KeyRound, Plus, RefreshCw, Save, Trash2, X } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
 import { createOpenAICompatibleProvider } from "../core/providers/openAICompatibleProvider";
 import { createOpenAIProvider } from "../core/providers/openAIProvider";
 import {
@@ -7,17 +8,32 @@ import {
   type ProviderConfig,
   type ProviderType,
 } from "../core/providers/providerConfig";
+import { createDefaultLocalModelRepository, type LocalModel } from "../core/local-models/localModel";
 import type { AppSettings, SubmitShortcut } from "../core/settings/appSettings";
 
 interface SettingsPanelProps {
   providerConfigs: ProviderConfig[];
   onProviderConfigsChange: (providerConfigs: ProviderConfig[]) => void;
+  localModels: LocalModel[];
+  onLocalModelsChange: (localModels: LocalModel[]) => void;
   appSettings: AppSettings;
   onAppSettingsChange: (appSettings: AppSettings) => void;
   onClose: () => void;
 }
 
 const providerConfigRepository = createDefaultProviderConfigRepository();
+const localModelRepository = createDefaultLocalModelRepository();
+const isTauri = "__TAURI_INTERNALS__" in window;
+
+function formatFileSize(bytes: number): string {
+  if (bytes >= 1024 ** 3) {
+    return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  }
+  if (bytes >= 1024 ** 2) {
+    return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  }
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
 
 function createDraftProvider(): ProviderConfig {
   return {
@@ -34,6 +50,8 @@ function createDraftProvider(): ProviderConfig {
 export function SettingsPanel({
   providerConfigs,
   onProviderConfigsChange,
+  localModels,
+  onLocalModelsChange,
   appSettings,
   onAppSettingsChange,
   onClose,
@@ -41,6 +59,7 @@ export function SettingsPanel({
   const [draftProvider, setDraftProvider] = useState<ProviderConfig>(providerConfigs[0] ?? createDraftProvider());
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState("Provider config is local to this app.");
+  const [localModelStatus, setLocalModelStatus] = useState("Import a .gguf file to make it selectable in chat.");
 
   useEffect(() => {
     setDraftProvider((current) => providerConfigs.find((config) => config.id === current.id) ?? providerConfigs[0] ?? createDraftProvider());
@@ -83,11 +102,8 @@ export function SettingsPanel({
         return;
       }
 
-      updateDraft({
-        models,
-        defaultModelId: draftProvider.defaultModelId || models[0].id,
-      });
-      setStatus(`Fetched ${models.length} model${models.length === 1 ? "" : "s"}.`);
+      updateDraft({ models });
+      setStatus(`Fetched ${models.length} model${models.length === 1 ? "" : "s"}. All of them are selectable from the chat model picker.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not fetch models.");
     }
@@ -126,6 +142,36 @@ export function SettingsPanel({
       setApiKey("");
       setStatus(nextProvider.hasApiKey ? "Saved key available." : "No key saved for this provider.");
     }
+  };
+
+  const handleImportLocalModel = async () => {
+    try {
+      const selectedPath = await open({
+        multiple: false,
+        filters: [{ name: "GGUF model", extensions: ["gguf"] }],
+      });
+
+      if (!selectedPath || Array.isArray(selectedPath)) {
+        return;
+      }
+
+      setLocalModelStatus("Reading model metadata...");
+      const imported = await localModelRepository.importLocalModel(selectedPath);
+      onLocalModelsChange([imported, ...localModels]);
+      setLocalModelStatus(
+        imported.parseStatus === "parsed"
+          ? `Imported ${imported.fileName}.`
+          : `Imported ${imported.fileName}, but its GGUF metadata could not be fully read.`,
+      );
+    } catch (error) {
+      setLocalModelStatus(error instanceof Error ? error.message : "Could not import this model.");
+    }
+  };
+
+  const handleRemoveLocalModel = async (id: string) => {
+    await localModelRepository.removeLocalModel(id);
+    onLocalModelsChange(localModels.filter((model) => model.id !== id));
+    setLocalModelStatus("Model removed.");
   };
 
   return (
@@ -218,11 +264,11 @@ export function SettingsPanel({
               />
             </label>
             <label>
-              <span>Default model</span>
+              <span>Manual model ID (only used if you don't fetch a list)</span>
               <input
                 value={draftProvider.defaultModelId}
                 onChange={(event) => updateDraft({ defaultModelId: event.target.value })}
-                placeholder="model id"
+                placeholder="e.g. gpt-4o-mini"
               />
             </label>
             <div className="settings-actions">
@@ -244,22 +290,49 @@ export function SettingsPanel({
               {status}
             </p>
           </form>
-          <div>
-            <h3>{draftProvider.name ? `${draftProvider.name} models` : "Models"}</h3>
-            {draftProvider.models.length ? (
-              draftProvider.models.map((model) => (
-                <div className="settings-row" key={model.id}>
-                  <strong>{model.name}</strong>
-                  <span>{model.location} / {model.contextTokens.toLocaleString()} tokens</span>
-                </div>
-              ))
-            ) : (
-              <div className="settings-row">
-                <strong>No models fetched</strong>
-                <span>Fetch models or enter a default model to use this provider.</span>
+          {isTauri ? (
+            <div>
+              <h3>Local Models</h3>
+              <p className="settings-note">
+                Local models stay selectable in chat alongside any providers you configure below — you never need to
+                remove one to use the other.
+              </p>
+              <div className="settings-actions">
+                <button type="button" onClick={handleImportLocalModel}>
+                  <FolderOpen size={15} />
+                  Import GGUF model
+                </button>
               </div>
-            )}
-          </div>
+              <p className="settings-note">
+                <KeyRound size={14} />
+                {localModelStatus}
+              </p>
+              {localModels.length ? (
+                localModels.map((model) => (
+                  <div className="settings-row" key={model.id}>
+                    <strong>{model.fileName}</strong>
+                    <span>
+                      {model.parseStatus === "parsed"
+                        ? [model.architecture, model.quantization, model.contextLength ? `${model.contextLength.toLocaleString()} ctx` : null]
+                            .filter(Boolean)
+                            .join(" / ")
+                        : "GGUF metadata unavailable"}
+                      {" · "}
+                      {formatFileSize(model.fileSizeBytes)}
+                    </span>
+                    <button type="button" aria-label={`Remove ${model.fileName}`} onClick={() => handleRemoveLocalModel(model.id)}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div className="settings-row">
+                  <strong>No local models imported</strong>
+                  <span>Import a .gguf file from disk to make it selectable in chat.</span>
+                </div>
+              )}
+            </div>
+          ) : null}
           <div>
             <h3>Providers</h3>
             {providerConfigs.length ? (

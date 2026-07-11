@@ -117,7 +117,7 @@ button {
   justify-content: center;
   gap: 8px;
   border: 1px solid #191a1c;
-  color: #b0fffe;
+  color: #7ce7ff;
   background: #181a1e;
   border-radius: 8px;
 }
@@ -130,7 +130,7 @@ button {
 
 .primary-button {
   height: 34px;
-  background: #b0fffe;
+  background: #7ce7ff;
   color: #101010;
   border-color: #f7f7f5;
   font-size: 13px;
@@ -207,7 +207,7 @@ button {
 
 .chat-row.active,
 .chat-row:hover {
-  color: #b0fffe;
+  color: #9bfffd;
 }
 
 .chat-workspace {
@@ -314,7 +314,7 @@ button {
 
 .empty-chat h2 {
   margin: 0;
-  color: #b0fffe;
+  color: #9bfffd;
   font-size: clamp(24px, 4vw, 34px);
   font-weight: 600;
 }
@@ -326,6 +326,7 @@ button {
 }
 
 .message {
+  align-self: flex-start;
   max-width: 760px;
   padding: 14px 16px;
   border: 1px solid #262a30;
@@ -335,8 +336,11 @@ button {
 
 .message.user {
   align-self: flex-end;
-  background: #b0fffe;
-  color: #020202;
+  max-width: 760px;
+  padding: 14px 16px;
+  border: 1px solid #262a30;
+  border-radius: 8px;
+  background: #131519;
 }
 
 .message.pending {
@@ -350,7 +354,7 @@ button {
 }
 
 .message-role {
-  color: #b0fffe;
+  color: #1d8dfe;
   font-size: 11px;
   font-weight: 750;
   letter-spacing: 0.08em;
@@ -358,9 +362,11 @@ button {
 }
 
 .message.user .message-role {
-  color: #181819;
+  color: #3efffc;
   font-size: 11px;
   font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .tool-stack {
@@ -454,7 +460,7 @@ button {
   gap: 10px;
   padding: 28px;
   text-align: center;
-  color: #a8afb8;
+  color: #9bfffd;
 }
 
 .empty-canvas h3 {

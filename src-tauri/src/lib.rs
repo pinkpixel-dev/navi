@@ -1,4 +1,5 @@
 mod credentials;
+mod gguf;
 mod storage;
 
 use storage::{ConversationSnapshot, NaviStorage};
@@ -56,9 +57,59 @@ fn get_provider_api_key(provider_id: String) -> Result<Option<String>, String> {
     credentials::get_provider_api_key(&provider_id)
 }
 
+#[tauri::command]
+fn import_local_model(
+    app: AppHandle,
+    id: String,
+    file_path: String,
+    added_at: String,
+) -> Result<serde_json::Value, String> {
+    let path = std::path::Path::new(&file_path);
+    let file_metadata = std::fs::metadata(path).map_err(|error| format!("Could not read model file: {error}"))?;
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| file_path.clone());
+    let gguf_metadata = gguf::read_gguf_metadata(path);
+
+    let record = serde_json::json!({
+        "id": id,
+        "fileName": file_name,
+        "filePath": file_path,
+        "fileSizeBytes": file_metadata.len(),
+        "addedAt": added_at,
+        "architecture": gguf_metadata.architecture,
+        "quantization": gguf_metadata.quantization,
+        "contextLength": gguf_metadata.context_length,
+        "chatTemplate": gguf_metadata.chat_template,
+        "parseStatus": gguf_metadata.parse_status,
+    });
+
+    storage_for_app(&app)?
+        .save_local_model(&record)
+        .map_err(|error| format!("Could not save local model: {error}"))?;
+
+    Ok(record)
+}
+
+#[tauri::command]
+fn load_local_models(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    storage_for_app(&app)?
+        .load_local_models()
+        .map_err(|error| format!("Could not load local models: {error}"))
+}
+
+#[tauri::command]
+fn remove_local_model(app: AppHandle, id: String) -> Result<(), String> {
+    storage_for_app(&app)?
+        .delete_local_model(&id)
+        .map_err(|error| format!("Could not remove local model: {error}"))
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             app_status,
             save_conversation_snapshot,
@@ -66,7 +117,10 @@ pub fn run() {
             save_provider_config,
             load_provider_configs,
             save_provider_api_key,
-            get_provider_api_key
+            get_provider_api_key,
+            import_local_model,
+            load_local_models,
+            remove_local_model
         ])
         .run(tauri::generate_context!())
         .expect("error while running Navi");

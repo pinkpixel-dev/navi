@@ -105,6 +105,15 @@ impl NaviStorage {
                 payload_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS local_models (
+                id TEXT PRIMARY KEY,
+                file_name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size_bytes INTEGER NOT NULL,
+                added_at TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id);
             CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation_id ON tool_calls(conversation_id);
             CREATE INDEX IF NOT EXISTS idx_run_events_conversation_id ON run_events(conversation_id);
@@ -267,6 +276,62 @@ impl NaviStorage {
         }
 
         Ok(configs)
+    }
+
+    pub fn save_local_model(&self, model: &Value) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "
+            INSERT INTO local_models (
+                id,
+                file_name,
+                file_path,
+                file_size_bytes,
+                added_at,
+                payload_json
+            )
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ON CONFLICT(id) DO UPDATE SET
+                file_name = excluded.file_name,
+                file_path = excluded.file_path,
+                file_size_bytes = excluded.file_size_bytes,
+                added_at = excluded.added_at,
+                payload_json = excluded.payload_json
+            ",
+            params![
+                string_at(model, "id"),
+                string_at(model, "fileName"),
+                string_at(model, "filePath"),
+                model.get("fileSizeBytes").and_then(Value::as_i64).unwrap_or_default(),
+                string_at(model, "addedAt"),
+                model.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_local_models(&self) -> rusqlite::Result<Vec<Value>> {
+        let mut statement = self.conn.prepare(
+            "
+            SELECT payload_json
+            FROM local_models
+            ORDER BY rowid DESC
+            ",
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        let mut models = Vec::new();
+
+        for row in rows {
+            let value = serde_json::from_str(&row?)
+                .map_err(|error| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, error.into()))?;
+            models.push(value);
+        }
+
+        Ok(models)
+    }
+
+    pub fn delete_local_model(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn.execute("DELETE FROM local_models WHERE id = ?1", params![id])?;
+        Ok(())
     }
 
     fn insert_message(&self, conversation_id: &str, message: &Value) -> rusqlite::Result<()> {
@@ -502,5 +567,32 @@ mod tests {
         assert_eq!(configs[0]["name"], "Local compatible");
         assert!(configs[0].get("apiKey").is_none());
         assert!(!configs[0].to_string().contains("should-not-save"));
+    }
+
+    #[test]
+    fn saves_loads_and_deletes_local_models() {
+        let storage = NaviStorage::open_in_memory().expect("storage should open");
+        let model = serde_json::json!({
+            "id": "model-1",
+            "fileName": "test-model.gguf",
+            "filePath": "/models/test-model.gguf",
+            "fileSizeBytes": 4_294_967_296i64,
+            "addedAt": "2026-07-11T00:00:00.000Z",
+            "architecture": "llama",
+            "quantization": "Q4_K_M",
+            "contextLength": 8192,
+            "parseStatus": "parsed"
+        });
+
+        storage.save_local_model(&model).expect("model should save");
+
+        let models = storage.load_local_models().expect("models should load");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["fileName"], "test-model.gguf");
+        assert_eq!(models[0]["architecture"], "llama");
+
+        storage.delete_local_model("model-1").expect("model should delete");
+        let models = storage.load_local_models().expect("models should load");
+        assert_eq!(models.len(), 0);
     }
 }

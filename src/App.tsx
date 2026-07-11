@@ -15,10 +15,12 @@ import { createOpenAICompatibleProvider } from "./core/providers/openAICompatibl
 import { createOpenAIProvider } from "./core/providers/openAIProvider";
 import { providerModels } from "./core/providers/registry";
 import type { ChatProvider, ProviderModel } from "./core/providers/types";
+import { createDefaultLocalModelRepository, type LocalModel } from "./core/local-models/localModel";
 import { loadAppSettings, saveAppSettings, type AppSettings } from "./core/settings/appSettings";
 
 const conversationRepository = createDefaultConversationRepository();
 const providerConfigRepository = createDefaultProviderConfigRepository();
+const localModelRepository = createDefaultLocalModelRepository();
 
 function createModelsForProviderConfig(config: ProviderConfig): ProviderModel[] {
   if (config.models.length) {
@@ -42,6 +44,21 @@ function createModelsForProviderConfig(config: ProviderConfig): ProviderModel[] 
       contextTokens: 128000,
     },
   ];
+}
+
+function pickPreferredModel(models: ProviderModel[], lastModelId?: string): ProviderModel {
+  return models.find((model) => model.id === lastModelId) ?? models[0];
+}
+
+function createModelFromLocalModel(model: LocalModel): ProviderModel {
+  return {
+    id: model.id,
+    name: model.fileName,
+    provider: "llama.cpp",
+    location: "local",
+    capabilities: ["structured-output"],
+    contextTokens: model.contextLength ?? 4096,
+  };
 }
 
 function createBlankConversation(model?: ProviderModel): Conversation {
@@ -75,6 +92,7 @@ export default function App() {
   const [activeRunController, setActiveRunController] = useState<AbortController | null>(null);
   const [isCanvasOpen, setIsCanvasOpen] = useState(false);
   const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
+  const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(() => loadAppSettings());
   const lastOpenedArtifactId = useRef<string | null>(null);
@@ -89,8 +107,12 @@ export default function App() {
     [activeConversation.messages],
   );
   const availableModels = useMemo(
-    () => [...providerModels, ...providerConfigs.flatMap(createModelsForProviderConfig)],
-    [providerConfigs],
+    () => [
+      ...providerModels,
+      ...providerConfigs.flatMap(createModelsForProviderConfig),
+      ...localModels.map(createModelFromLocalModel),
+    ],
+    [providerConfigs, localModels],
   );
 
   useEffect(() => {
@@ -123,9 +145,9 @@ export default function App() {
 
     const activeModelExists = availableModels.some((model) => model.id === activeConversation.model);
     if (!activeConversation.model || !activeModelExists) {
-      handleModelChange(availableModels[0]);
+      handleModelChange(pickPreferredModel(availableModels, appSettings.lastModelId));
     }
-  }, [activeConversation.model, availableModels]);
+  }, [activeConversation.model, availableModels, appSettings.lastModelId]);
 
   useEffect(() => {
     providerConfigRepository
@@ -133,6 +155,15 @@ export default function App() {
       .then(setProviderConfigs)
       .catch((error: unknown) => {
         console.error("Could not load provider configs", error);
+      });
+  }, []);
+
+  useEffect(() => {
+    localModelRepository
+      .loadLocalModels()
+      .then(setLocalModels)
+      .catch((error: unknown) => {
+        console.error("Could not load local models", error);
       });
   }, []);
 
@@ -204,7 +235,10 @@ export default function App() {
   };
 
   const handleNewChat = () => {
-    const conversation = createBlankConversation(availableModels[0]);
+    const preferredModel = availableModels.length
+      ? pickPreferredModel(availableModels, appSettings.lastModelId)
+      : undefined;
+    const conversation = createBlankConversation(preferredModel);
 
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
@@ -310,6 +344,7 @@ export default function App() {
     saveConversationSnapshot(updatedConversation).catch((error: unknown) => {
       console.error("Could not save selected model", error);
     });
+    handleAppSettingsChange({ ...appSettings, lastModelId: model.id });
   };
 
   return (
@@ -338,6 +373,8 @@ export default function App() {
         <SettingsPanel
           providerConfigs={providerConfigs}
           onProviderConfigsChange={setProviderConfigs}
+          localModels={localModels}
+          onLocalModelsChange={setLocalModels}
           appSettings={appSettings}
           onAppSettingsChange={handleAppSettingsChange}
           onClose={() => setShowSettings(false)}
