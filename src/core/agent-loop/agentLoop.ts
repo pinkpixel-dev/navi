@@ -1,10 +1,12 @@
-import type { ChatMessage, Conversation } from "../conversation/types";
-import type { ProviderCompleteInput, ProviderResponse } from "../providers/types";
-import { toolRegistry } from "../tools/toolRegistry";
-import type { ToolDefinition } from "../tools/types";
-import type { AgentRunResult, ApprovalPolicy, RunEvent, RunLimits, RunRetryPolicy } from "./types";
+import type { ChatMessage, Conversation, ToolCallEvent } from "../conversation/types";
+import type { ProviderCompleteInput, ProviderResponse, ProviderToolSchema } from "../providers/types";
+import type { AgentRunResult, ApprovalDecision, ApprovalPolicy, RunEvent, RunLimits, RunRetryPolicy } from "./types";
 
 type ProviderComplete = (input: ProviderCompleteInput) => Promise<ProviderResponse>;
+interface ToolExecutionResult {
+  content: string;
+  isError: boolean;
+}
 
 interface RunAgentLoopInput {
   conversation: Conversation;
@@ -13,6 +15,9 @@ interface RunAgentLoopInput {
   limits?: RunLimits;
   retry?: RunRetryPolicy;
   providerComplete: ProviderComplete;
+  tools?: ProviderToolSchema[];
+  executeTool?: (toolCall: ToolCallEvent) => Promise<ToolExecutionResult>;
+  requestApproval?: (toolCall: ToolCallEvent) => Promise<ApprovalDecision>;
   signal?: AbortSignal;
   timeoutMs?: number;
   onEvent?: (event: RunEvent) => void;
@@ -25,11 +30,14 @@ const defaultLimits: RunLimits = {
 
 const seedMessageIds = new Set(["message-welcome", "message-plan", "message-mcp"]);
 const internalAssistantMessages = new Set([
-  "The provider request failed.",
   "The run was cancelled.",
   "The run timed out before the provider responded.",
   "The run stopped because the model step limit was reached.",
 ]);
+
+function isInternalFailureMessage(content: string): boolean {
+  return content.startsWith("The provider request failed");
+}
 
 function createEventId(): string {
   return crypto.randomUUID();
@@ -69,12 +77,22 @@ function createUserMessage(content: string): ChatMessage {
   };
 }
 
+function createToolResultMessage(toolCallId: string, content: string): ChatMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: "tool",
+    createdAt: createTimestamp(),
+    content,
+    toolCallId,
+  };
+}
+
 function isProviderContextMessage(message: ChatMessage): boolean {
   if (seedMessageIds.has(message.id)) {
     return false;
   }
 
-  if (message.role === "assistant" && internalAssistantMessages.has(message.content)) {
+  if (message.role === "assistant" && (internalAssistantMessages.has(message.content) || isInternalFailureMessage(message.content))) {
     return false;
   }
 
@@ -137,6 +155,9 @@ export async function runAgentLoop({
   limits = defaultLimits,
   retry = { maxAttempts: 1 },
   providerComplete,
+  tools,
+  executeTool,
+  requestApproval,
   signal,
   timeoutMs,
   onEvent,
@@ -153,12 +174,6 @@ export async function runAgentLoop({
     type: "run_started",
     timestamp: createTimestamp(),
   });
-  record({
-    id: createEventId(),
-    type: "model_request_started",
-    timestamp: createTimestamp(),
-    step: 1,
-  });
 
   if (limits.maxModelSteps < 1) {
     record({
@@ -173,207 +188,176 @@ export async function runAgentLoop({
       id: runId,
       status: "failed",
       message: createFallbackMessage("The run stopped because the model step limit was reached."),
+      transcript: [],
       events,
     };
   }
 
-  let response;
-  let streamedAnyDelta = false;
+  const workingMessages = createProviderMessages(conversation, input);
+  const seedLength = workingMessages.length;
+  const allToolCalls: ToolCallEvent[] = [];
+  let totalToolCallCount = 0;
   const maxAttempts = Math.max(1, retry.maxAttempts);
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    try {
-      response = await runWithControls(
-        () =>
-          providerComplete({
-            messages: createProviderMessages(conversation, input),
-            signal,
-            onDelta: (delta) => {
-              streamedAnyDelta = true;
-              record({
-                id: createEventId(),
-                type: "assistant_text_delta",
-                timestamp: createTimestamp(),
-                delta,
-              });
-            },
-          }),
-        signal,
-        timeoutMs,
-      );
-      break;
-    } catch (error) {
-      if (isAbortError(error)) {
-        record({
-          id: createEventId(),
-          type: "run_cancelled",
-          timestamp: createTimestamp(),
-          reason: "user_cancelled",
-          message: "The run was cancelled.",
-        });
+  for (let step = 1; step <= limits.maxModelSteps; step += 1) {
+    record({
+      id: createEventId(),
+      type: "model_request_started",
+      timestamp: createTimestamp(),
+      step,
+    });
 
-        return {
-          id: runId,
-          status: "cancelled",
-          message: createCancelledMessage(),
-          events,
-        };
-      }
+    let response: ProviderResponse | undefined;
+    let streamedAnyDelta = false;
 
-      if (error instanceof Error && error.message === "Run timed out.") {
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        response = await runWithControls(
+          () =>
+            providerComplete({
+              messages: workingMessages,
+              signal,
+              tools,
+              onDelta: (delta) => {
+                streamedAnyDelta = true;
+                record({
+                  id: createEventId(),
+                  type: "assistant_text_delta",
+                  timestamp: createTimestamp(),
+                  delta,
+                });
+              },
+            }),
+          signal,
+          timeoutMs,
+        );
+        break;
+      } catch (error) {
+        if (isAbortError(error)) {
+          record({
+            id: createEventId(),
+            type: "run_cancelled",
+            timestamp: createTimestamp(),
+            reason: "user_cancelled",
+            message: "The run was cancelled.",
+          });
+
+          return {
+            id: runId,
+            status: "cancelled",
+            message: createCancelledMessage(),
+            transcript: workingMessages.slice(seedLength),
+            events,
+          };
+        }
+
+        if (error instanceof Error && error.message === "Run timed out.") {
+          record({
+            id: createEventId(),
+            type: "run_failed",
+            timestamp: createTimestamp(),
+            reason: "timeout",
+            message: "The run timed out before the provider responded.",
+          });
+
+          return {
+            id: runId,
+            status: "failed",
+            message: createTimeoutMessage(),
+            transcript: workingMessages.slice(seedLength),
+            events,
+          };
+        }
+
+        if (attempt < maxAttempts) {
+          record({
+            id: createEventId(),
+            type: "run_retrying",
+            timestamp: createTimestamp(),
+            attempt: attempt + 1,
+            maxAttempts,
+            reason: "provider_error",
+            message: error instanceof Error ? error.message : "The provider request failed.",
+          });
+          continue;
+        }
+
+        const failureReason = error instanceof Error ? error.message : "The provider request failed.";
         record({
           id: createEventId(),
           type: "run_failed",
           timestamp: createTimestamp(),
-          reason: "timeout",
-          message: "The run timed out before the provider responded.",
+          reason: "provider_error",
+          message: failureReason,
         });
 
         return {
           id: runId,
           status: "failed",
-          message: createTimeoutMessage(),
+          message: createFallbackMessage(`The provider request failed: ${failureReason}`),
+          transcript: workingMessages.slice(seedLength),
           events,
         };
       }
+    }
 
-      if (attempt < maxAttempts) {
-        record({
-          id: createEventId(),
-          type: "run_retrying",
-          timestamp: createTimestamp(),
-          attempt: attempt + 1,
-          maxAttempts,
-          reason: "provider_error",
-          message: error instanceof Error ? error.message : "The provider request failed.",
-        });
-        continue;
-      }
-
+    if (!response) {
       record({
         id: createEventId(),
         type: "run_failed",
         timestamp: createTimestamp(),
         reason: "provider_error",
-        message: error instanceof Error ? error.message : "The provider request failed.",
+        message: "The provider request failed.",
       });
 
       return {
         id: runId,
         status: "failed",
         message: createFallbackMessage("The provider request failed."),
+        transcript: workingMessages.slice(seedLength),
         events,
       };
     }
-  }
 
-  if (!response) {
-    record({
-      id: createEventId(),
-      type: "run_failed",
-      timestamp: createTimestamp(),
-      reason: "provider_error",
-      message: "The provider request failed.",
-    });
-
-    return {
-      id: runId,
-      status: "failed",
-      message: createFallbackMessage("The provider request failed."),
-      events,
-    };
-  }
-
-  if (response.toolCalls.length > limits.maxToolCalls) {
-    record({
-      id: createEventId(),
-      type: "run_failed",
-      timestamp: createTimestamp(),
-      reason: "tool_call_limit_reached",
-      message: "The run stopped because the tool call limit was reached.",
-    });
-
-    return {
-      id: runId,
-      status: "failed",
-      message: createFallbackMessage("The run stopped because the tool call limit was reached."),
-      events,
-    };
-  }
-
-  if (response.toolCalls.length === 0) {
-    if (!streamedAnyDelta) {
+    totalToolCallCount += response.toolCalls.length;
+    if (totalToolCallCount > limits.maxToolCalls) {
       record({
         id: createEventId(),
-        type: "assistant_text_delta",
+        type: "run_failed",
         timestamp: createTimestamp(),
-        delta: response.message.content,
+        reason: "tool_call_limit_reached",
+        message: "The run stopped because the tool call limit was reached.",
       });
-    }
-    record({
-      id: createEventId(),
-      type: "assistant_message_completed",
-      timestamp: createTimestamp(),
-      message: response.message,
-    });
-    record({
-      id: createEventId(),
-      type: "run_completed",
-      timestamp: createTimestamp(),
-    });
 
-    return {
-      id: runId,
-      status: "completed",
-      message: response.message,
-      events,
-    };
-  }
-
-  const toolNames = response.toolCalls.map((tool) => tool.toolName);
-  const knownTools = toolRegistry.filter((tool: ToolDefinition) => toolNames.includes(tool.name));
-  const deniedToolCall = response.toolCalls.find(
-    (toolCall) => approvalPolicy === "deny-writes" && toolCall.risk === "write",
-  );
-
-  for (const toolCall of response.toolCalls) {
-    record({
-      id: createEventId(),
-      type: "tool_call_requested",
-      timestamp: createTimestamp(),
-      toolCall,
-    });
-
-    if (toolCall.risk === "write" || toolCall.risk === "destructive") {
-      record({
-        id: createEventId(),
-        type: "tool_call_awaiting_approval",
-        timestamp: createTimestamp(),
-        toolCall,
-      });
+      return {
+        id: runId,
+        status: "failed",
+        message: createFallbackMessage("The run stopped because the tool call limit was reached."),
+        transcript: workingMessages.slice(seedLength),
+        events,
+      };
     }
 
-    if (deniedToolCall?.id === toolCall.id) {
-      const deniedMessage: ChatMessage = {
+    if (response.toolCalls.length === 0) {
+      if (!streamedAnyDelta) {
+        record({
+          id: createEventId(),
+          type: "assistant_text_delta",
+          timestamp: createTimestamp(),
+          delta: response.message.content,
+        });
+      }
+
+      const finalMessage: ChatMessage = {
         ...response.message,
-        content: "The requested write tool was denied by the current approval policy.",
-        toolCalls: response.toolCalls.map((currentToolCall) =>
-          currentToolCall.id === toolCall.id ? { ...currentToolCall, status: "failed" } : currentToolCall,
-        ),
+        toolCalls: allToolCalls.length ? allToolCalls : undefined,
       };
 
-      record({
-        id: createEventId(),
-        type: "tool_call_denied",
-        timestamp: createTimestamp(),
-        toolCall: { ...toolCall, status: "failed" },
-        reason: "Approval policy denies write tools.",
-      });
       record({
         id: createEventId(),
         type: "assistant_message_completed",
         timestamp: createTimestamp(),
-        message: deniedMessage,
+        message: finalMessage,
       });
       record({
         id: createEventId(),
@@ -384,55 +368,136 @@ export async function runAgentLoop({
       return {
         id: runId,
         status: "completed",
-        message: deniedMessage,
+        message: finalMessage,
+        transcript: workingMessages.slice(seedLength),
         events,
       };
     }
 
-    record({
-      id: createEventId(),
-      type: "tool_execution_started",
-      timestamp: createTimestamp(),
-      toolCall,
-    });
-    record({
-      id: createEventId(),
-      type: "tool_result_returned",
-      timestamp: createTimestamp(),
-      toolCall: { ...toolCall, status: "completed" },
-      result: toolCall.summary,
-    });
+    workingMessages.push(response.message);
+
+    for (const toolCall of response.toolCalls) {
+      record({
+        id: createEventId(),
+        type: "tool_call_requested",
+        timestamp: createTimestamp(),
+        toolCall,
+      });
+
+      const needsApproval = toolCall.risk === "write" || toolCall.risk === "destructive";
+      if (needsApproval) {
+        record({
+          id: createEventId(),
+          type: "tool_call_awaiting_approval",
+          timestamp: createTimestamp(),
+          toolCall,
+        });
+      }
+
+      let decision: ApprovalDecision = "allow-once";
+      if (needsApproval) {
+        if (requestApproval) {
+          decision = await requestApproval(toolCall);
+        } else if (approvalPolicy === "deny-writes") {
+          decision = "deny";
+        }
+      }
+
+      if (decision === "deny") {
+        const deniedToolCall: ToolCallEvent = {
+          ...toolCall,
+          status: "failed",
+          result: "The user denied this tool call.",
+        };
+
+        record({
+          id: createEventId(),
+          type: "tool_call_denied",
+          timestamp: createTimestamp(),
+          toolCall: deniedToolCall,
+          reason: requestApproval ? "Denied by the user." : "Approval policy denies write tools.",
+        });
+
+        // Static-policy fallback (no interactive approval wired up): reproduce the
+        // original hard-stop behavior exactly instead of continuing the loop.
+        if (!requestApproval) {
+          const deniedMessage: ChatMessage = {
+            ...response.message,
+            content: "The requested write tool was denied by the current approval policy.",
+            toolCalls: response.toolCalls.map((currentToolCall) =>
+              currentToolCall.id === toolCall.id ? deniedToolCall : currentToolCall,
+            ),
+          };
+
+          record({
+            id: createEventId(),
+            type: "assistant_message_completed",
+            timestamp: createTimestamp(),
+            message: deniedMessage,
+          });
+          record({
+            id: createEventId(),
+            type: "run_completed",
+            timestamp: createTimestamp(),
+          });
+
+          return {
+            id: runId,
+            status: "completed",
+            message: deniedMessage,
+            transcript: [],
+            events,
+          };
+        }
+
+        allToolCalls.push(deniedToolCall);
+        workingMessages.push(createToolResultMessage(toolCall.id, "The user denied this tool call."));
+        continue;
+      }
+
+      record({
+        id: createEventId(),
+        type: "tool_execution_started",
+        timestamp: createTimestamp(),
+        toolCall,
+      });
+
+      const executionResult: ToolExecutionResult = executeTool
+        ? await executeTool(toolCall)
+        : { content: toolCall.summary, isError: false };
+
+      const completedToolCall: ToolCallEvent = {
+        ...toolCall,
+        status: executionResult.isError ? "failed" : "completed",
+        result: executionResult.content,
+      };
+      allToolCalls.push(completedToolCall);
+
+      record({
+        id: createEventId(),
+        type: "tool_result_returned",
+        timestamp: createTimestamp(),
+        toolCall: completedToolCall,
+        result: executionResult.content,
+      });
+
+      workingMessages.push(createToolResultMessage(toolCall.id, executionResult.content));
+    }
   }
 
-  const toolsUsedSuffix = `\n\nTools used: ${knownTools.map((tool) => tool.label).join(", ")}.`;
-  const message: ChatMessage = {
-    ...response.message,
-    content: `${response.message.content}${toolsUsedSuffix}`,
-    toolCalls: response.toolCalls.map((toolCall) => ({ ...toolCall, status: "completed" })),
-  };
-
   record({
     id: createEventId(),
-    type: "assistant_text_delta",
+    type: "run_failed",
     timestamp: createTimestamp(),
-    delta: streamedAnyDelta ? toolsUsedSuffix : message.content,
-  });
-  record({
-    id: createEventId(),
-    type: "assistant_message_completed",
-    timestamp: createTimestamp(),
-    message,
-  });
-  record({
-    id: createEventId(),
-    type: "run_completed",
-    timestamp: createTimestamp(),
+    reason: "model_step_limit_reached",
+    message: "The run stopped because the model step limit was reached.",
   });
 
   return {
     id: runId,
-    status: "completed",
-    message,
+    status: "failed",
+    message: createFallbackMessage("The run stopped because the model step limit was reached."),
+    transcript: workingMessages.slice(seedLength),
     events,
   };
 }

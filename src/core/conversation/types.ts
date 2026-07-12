@@ -12,6 +12,10 @@ export interface ToolCallEvent {
   risk: "read" | "write" | "destructive" | "network";
   durationMs?: number;
   summary: string;
+  /** Raw JSON arguments string, needed to replay this call back to the model on the next step. */
+  arguments?: string;
+  /** What the tool actually returned (or the denial reason), for display on persisted messages. */
+  result?: string;
 }
 
 export interface ChatMessage {
@@ -20,6 +24,8 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   toolCalls?: ToolCallEvent[];
+  /** For role: "tool" messages, links this result back to the tool call it answers. */
+  toolCallId?: string;
 }
 
 export interface Conversation {

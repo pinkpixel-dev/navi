@@ -1,5 +1,5 @@
 import type { ChatMessage, ToolCallEvent } from "../conversation/types";
-import { streamOpenAIChatCompletion, type StreamedToolCall } from "./openAIChatStream";
+import { streamOpenAIChatCompletion, toOpenAIWireMessages, type StreamedToolCall } from "./openAIChatStream";
 import type { ChatProvider, ProviderCompleteInput, ProviderModel, ProviderResponse } from "./types";
 
 type Fetcher = typeof fetch;
@@ -19,13 +19,6 @@ interface CompatibleModelsResponse {
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
-}
-
-function toCompatibleMessage(message: ChatMessage) {
-  return {
-    role: message.role === "tool" ? "user" : message.role,
-    content: message.content,
-  };
 }
 
 function toolCallRisk(toolName: string): ToolCallEvent["risk"] {
@@ -53,6 +46,7 @@ function normalizeToolCall(toolCall: StreamedToolCall): ToolCallEvent {
     status: "queued",
     risk: toolCallRisk(toolName),
     summary: `Provider requested ${toolName} with ${rawArguments}.`,
+    arguments: rawArguments,
   };
 }
 
@@ -106,8 +100,9 @@ export function createOpenAICompatibleProvider(config: OpenAICompatibleProviderC
         headers: config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {},
         body: {
           model: config.model,
-          messages: input.messages.map(toCompatibleMessage),
+          messages: toOpenAIWireMessages(input.messages),
           stream: true,
+          ...(input.tools?.length ? { tools: input.tools } : {}),
         },
         signal: input.signal,
         errorPrefix: "OpenAI-compatible provider request failed",

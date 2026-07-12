@@ -24,6 +24,10 @@ interface SettingsPanelProps {
   onProviderConfigsChange: (providerConfigs: ProviderConfig[]) => void;
   localModels: LocalModel[];
   onLocalModelsChange: (localModels: LocalModel[]) => void;
+  mcpServers: McpServerConfig[];
+  onMcpServersChange: (mcpServers: McpServerConfig[]) => void;
+  mcpConnections: Record<string, McpServerStatus>;
+  onMcpConnectionsChange: (mcpConnections: Record<string, McpServerStatus>) => void;
   appSettings: AppSettings;
   onAppSettingsChange: (appSettings: AppSettings) => void;
   onClose: () => void;
@@ -107,6 +111,10 @@ export function SettingsPanel({
   onProviderConfigsChange,
   localModels,
   onLocalModelsChange,
+  mcpServers,
+  onMcpServersChange,
+  mcpConnections,
+  onMcpConnectionsChange,
   appSettings,
   onAppSettingsChange,
   onClose,
@@ -118,34 +126,16 @@ export function SettingsPanel({
   const [localModelStatus, setLocalModelStatus] = useState("Import a .gguf file to make it selectable in chat.");
   const [runtimeStatus, setRuntimeStatus] = useState<LocalRuntimeStatus>(idleRuntimeStatus);
   const [isRuntimeBusy, setIsRuntimeBusy] = useState(false);
-  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [draftMcpServer, setDraftMcpServer] = useState<McpServerConfig>(createDraftMcpServer());
   const [mcpArgsText, setMcpArgsText] = useState("");
   const [mcpEnvText, setMcpEnvText] = useState("");
   const [mcpHeadersText, setMcpHeadersText] = useState("");
   const [mcpStatus, setMcpStatus] = useState("Add a server to see its tools.");
   const [mcpTestResult, setMcpTestResult] = useState<McpServerStatus | null>(null);
-  const [mcpConnections, setMcpConnections] = useState<Record<string, McpServerStatus>>({});
 
   useEffect(() => {
     setDraftProvider((current) => providerConfigs.find((config) => config.id === current.id) ?? providerConfigs[0] ?? createDraftProvider());
   }, [providerConfigs]);
-
-  useEffect(() => {
-    if (!isTauri) {
-      return;
-    }
-    mcpServerDriver
-      .loadServers()
-      .then(async (servers) => {
-        setMcpServers(servers);
-        const statuses = await Promise.all(
-          servers.map(async (server) => [server.id, await mcpServerDriver.getServerStatus(server.id)] as const),
-        );
-        setMcpConnections(Object.fromEntries(statuses.filter(([, status]) => status.state === "connected")));
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (!isTauri) {
@@ -355,7 +345,7 @@ export function SettingsPanel({
     event.preventDefault();
     const config = buildMcpConfigFromDraft();
     await mcpServerDriver.saveServer(config);
-    setMcpServers((current) => [config, ...current.filter((server) => server.id !== config.id)]);
+    onMcpServersChange([config, ...mcpServers.filter((server) => server.id !== config.id)]);
     setDraftMcpServer(config);
     setMcpStatus("Server saved.");
   };
@@ -385,12 +375,10 @@ export function SettingsPanel({
   const handleRemoveMcpServer = async (id: string) => {
     await mcpServerDriver.disconnectServer(id).catch(() => {});
     await mcpServerDriver.removeServer(id);
-    setMcpServers((current) => current.filter((server) => server.id !== id));
-    setMcpConnections((current) => {
-      const next = { ...current };
-      delete next[id];
-      return next;
-    });
+    onMcpServersChange(mcpServers.filter((server) => server.id !== id));
+    const nextConnections = { ...mcpConnections };
+    delete nextConnections[id];
+    onMcpConnectionsChange(nextConnections);
     setMcpStatus("Server removed.");
   };
 
@@ -398,7 +386,7 @@ export function SettingsPanel({
     setMcpStatus(`Connecting to ${server.name}...`);
     try {
       const result = await mcpServerDriver.connectServer(server);
-      setMcpConnections((current) => ({ ...current, [server.id]: result }));
+      onMcpConnectionsChange({ ...mcpConnections, [server.id]: result });
       setMcpStatus(`${server.name}: ${result.tools.length} tool${result.tools.length === 1 ? "" : "s"} available.`);
     } catch (error) {
       setMcpStatus(error instanceof Error ? error.message : `Could not connect to ${server.name}.`);
@@ -407,11 +395,9 @@ export function SettingsPanel({
 
   const handleDisconnectMcpServer = async (server: McpServerConfig) => {
     await mcpServerDriver.disconnectServer(server.id);
-    setMcpConnections((current) => {
-      const next = { ...current };
-      delete next[server.id];
-      return next;
-    });
+    const nextConnections = { ...mcpConnections };
+    delete nextConnections[server.id];
+    onMcpConnectionsChange(nextConnections);
     setMcpStatus(`${server.name} disconnected.`);
   };
 

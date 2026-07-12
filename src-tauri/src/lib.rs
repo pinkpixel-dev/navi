@@ -180,6 +180,16 @@ async fn get_mcp_server_status(app: AppHandle, id: String) -> serde_json::Value 
     mcp_client::status(&app, &id).await
 }
 
+#[tauri::command]
+async fn call_mcp_tool(
+    app: AppHandle,
+    server_id: String,
+    tool_name: String,
+    arguments: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    mcp_client::call_tool(&app, &server_id, tool_name, arguments).await
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -208,7 +218,8 @@ pub fn run() {
             test_mcp_connection,
             connect_mcp_server,
             disconnect_mcp_server,
-            get_mcp_server_status
+            get_mcp_server_status,
+            call_mcp_tool
         ])
         .build(tauri::generate_context!())
         .expect("error while building Navi")

@@ -1,3 +1,57 @@
+import type { ChatMessage } from "../conversation/types";
+
+/**
+ * Converts a conversation's messages to OpenAI wire format. An assistant message only
+ * serializes as a `tool_calls` message when every one of its tool calls is immediately
+ * answered by a following `tool` message with a matching `tool_call_id` — the shape the
+ * API requires. A message that still carries `toolCalls` for UI display (e.g. a
+ * previously-completed turn's summarized final answer, persisted without its paired tool
+ * results) safely degrades to a plain content message instead of sending an orphaned
+ * `tool_calls` entry that the API would reject on the next turn.
+ */
+export function toOpenAIWireMessages(messages: ChatMessage[]): Record<string, unknown>[] {
+  return messages.map((message, index) => {
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      const followingToolCallIds = new Set<string>();
+      for (let next = index + 1; next < messages.length && messages[next].role === "tool"; next += 1) {
+        const toolCallId = messages[next].toolCallId;
+        if (toolCallId) {
+          followingToolCallIds.add(toolCallId);
+        }
+      }
+
+      const allCallsAnswered = message.toolCalls.every((toolCall) => followingToolCallIds.has(toolCall.id));
+      if (allCallsAnswered) {
+        return {
+          role: "assistant",
+          content: message.content || null,
+          tool_calls: message.toolCalls.map((toolCall) => ({
+            id: toolCall.id,
+            type: "function",
+            function: {
+              name: toolCall.toolName,
+              arguments: toolCall.arguments ?? "{}",
+            },
+          })),
+        };
+      }
+    }
+
+    if (message.role === "tool") {
+      return {
+        role: "tool",
+        tool_call_id: message.toolCallId ?? "",
+        content: message.content,
+      };
+    }
+
+    return {
+      role: message.role,
+      content: message.content,
+    };
+  });
+}
+
 export interface StreamedToolCall {
   id?: string;
   function?: {

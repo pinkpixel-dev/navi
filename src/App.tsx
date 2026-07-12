@@ -4,9 +4,9 @@ import { ChatWorkspace } from "./ui/ChatWorkspace";
 import { Sidebar } from "./ui/Sidebar";
 import { SettingsPanel } from "./ui/SettingsPanel";
 import { seedConversations } from "./core/conversation/seed";
-import type { Conversation, ChatMessage } from "./core/conversation/types";
+import type { Conversation, ChatMessage, ToolCallEvent } from "./core/conversation/types";
 import { runAgentLoop } from "./core/agent-loop/agentLoop";
-import type { RunEvent } from "./core/agent-loop/types";
+import type { ApprovalDecision, RunEvent } from "./core/agent-loop/types";
 import { chatRunReducer, createInitialChatRunState } from "./core/chat-state/chatRunReducer";
 import { createArtifactFromMessage } from "./canvas/artifacts";
 import { createDefaultConversationRepository } from "./persistence/conversationRepository";
@@ -15,15 +15,29 @@ import { createOpenAICompatibleProvider } from "./core/providers/openAICompatibl
 import { createOpenAIProvider } from "./core/providers/openAIProvider";
 import { createOllamaProvider } from "./core/providers/ollamaProvider";
 import { providerModels } from "./core/providers/registry";
-import type { ChatProvider, ProviderModel } from "./core/providers/types";
+import type {
+  ChatProvider,
+  ProviderCompleteInput,
+  ProviderModel,
+  ProviderResponse,
+  ProviderToolSchema,
+} from "./core/providers/types";
 import { createDefaultLocalModelRepository, type LocalModel } from "./core/local-models/localModel";
 import { createDefaultLlamaRuntimeDriver } from "./core/local-models/llamaRuntime";
 import { loadAppSettings, saveAppSettings, type AppSettings } from "./core/settings/appSettings";
+import { createDefaultMcpServerDriver, type McpServerConfig, type McpServerStatus } from "./core/mcp/mcpServer";
+import { mcpToolRisk, toProviderToolSchema } from "./core/mcp/mcpToolSchema";
 
 const conversationRepository = createDefaultConversationRepository();
 const providerConfigRepository = createDefaultProviderConfigRepository();
 const localModelRepository = createDefaultLocalModelRepository();
 const llamaRuntimeDriver = createDefaultLlamaRuntimeDriver();
+const mcpServerDriver = createDefaultMcpServerDriver();
+
+interface PendingApproval {
+  toolCall: ToolCallEvent;
+  resolve: (decision: ApprovalDecision) => void;
+}
 
 function createModelsForProviderConfig(config: ProviderConfig): ProviderModel[] {
   if (config.models.length) {
@@ -87,6 +101,35 @@ function createBlankConversation(model?: ProviderModel): Conversation {
   };
 }
 
+/**
+ * Provider adapters classify tool-call risk from the tool name alone (they only see the
+ * OpenAI-style wire format, not the original MCP tool's annotations). Override with the
+ * annotation-aware classification once we know which MCP tool each call actually maps to.
+ */
+async function completeWithToolRiskOverrides(
+  provider: ChatProvider,
+  input: ProviderCompleteInput,
+  toolRiskByName: Map<string, ToolCallEvent["risk"]>,
+): Promise<ProviderResponse> {
+  const response = await provider.complete(input);
+  if (!toolRiskByName.size || !response.toolCalls.length) {
+    return response;
+  }
+
+  const overrideRisk = (toolCall: ToolCallEvent): ToolCallEvent => ({
+    ...toolCall,
+    risk: toolRiskByName.get(toolCall.toolName) ?? toolCall.risk,
+  });
+
+  return {
+    message: {
+      ...response.message,
+      toolCalls: response.message.toolCalls?.map(overrideRisk),
+    },
+    toolCalls: response.toolCalls.map(overrideRisk),
+  };
+}
+
 function createSetupMessage(localModel?: LocalModel): ChatMessage {
   return {
     id: crypto.randomUUID(),
@@ -109,7 +152,11 @@ export default function App() {
   const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(() => loadAppSettings());
+  const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
+  const [mcpConnections, setMcpConnections] = useState<Record<string, McpServerStatus>>({});
+  const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const lastOpenedArtifactId = useRef<string | null>(null);
+  const conversationApprovals = useRef<Map<string, Set<string>>>(new Map());
 
   const activeConversation = useMemo(
     () => conversations.find((conversation) => conversation.id === activeConversationId) ?? conversations[0],
@@ -128,6 +175,37 @@ export default function App() {
     ],
     [providerConfigs, localModels],
   );
+
+  const toolRoute = useMemo(() => {
+    const route = new Map<string, { serverId: string; serverName: string }>();
+    for (const [serverId, status] of Object.entries(mcpConnections)) {
+      const serverName = mcpServers.find((server) => server.id === serverId)?.name ?? serverId;
+      for (const tool of status.tools) {
+        route.set(tool.name, { serverId, serverName });
+      }
+    }
+    return route;
+  }, [mcpConnections, mcpServers]);
+
+  const availableTools = useMemo<ProviderToolSchema[]>(() => {
+    const tools: ProviderToolSchema[] = [];
+    for (const status of Object.values(mcpConnections)) {
+      for (const tool of status.tools) {
+        tools.push(toProviderToolSchema(tool));
+      }
+    }
+    return tools;
+  }, [mcpConnections]);
+
+  const toolRiskByName = useMemo(() => {
+    const risks = new Map<string, ToolCallEvent["risk"]>();
+    for (const status of Object.values(mcpConnections)) {
+      for (const tool of status.tools) {
+        risks.set(tool.name, mcpToolRisk(tool));
+      }
+    }
+    return risks;
+  }, [mcpConnections]);
 
   useEffect(() => {
     let isMounted = true;
@@ -178,6 +256,21 @@ export default function App() {
       .then(setLocalModels)
       .catch((error: unknown) => {
         console.error("Could not load local models", error);
+      });
+  }, []);
+
+  useEffect(() => {
+    mcpServerDriver
+      .loadServers()
+      .then(async (servers) => {
+        setMcpServers(servers);
+        const statuses = await Promise.all(
+          servers.map(async (server) => [server.id, await mcpServerDriver.getServerStatus(server.id)] as const),
+        );
+        setMcpConnections(Object.fromEntries(statuses.filter(([, status]) => status.state === "connected")));
+      })
+      .catch((error: unknown) => {
+        console.error("Could not load MCP servers", error);
       });
   }, []);
 
@@ -272,6 +365,44 @@ export default function App() {
     return null;
   };
 
+  const executeTool = async (toolCall: ToolCallEvent): Promise<{ content: string; isError: boolean }> => {
+    const route = toolRoute.get(toolCall.toolName);
+    if (!route) {
+      return { content: `Tool '${toolCall.toolName}' is not currently available.`, isError: true };
+    }
+
+    try {
+      return await mcpServerDriver.callTool(route.serverId, toolCall.toolName, toolCall.arguments ?? "{}");
+    } catch (error) {
+      return {
+        content: error instanceof Error ? error.message : `Could not call tool '${toolCall.toolName}'.`,
+        isError: true,
+      };
+    }
+  };
+
+  const requestApproval = (toolCall: ToolCallEvent): Promise<ApprovalDecision> => {
+    const allowedTools = conversationApprovals.current.get(activeConversation.id);
+    if (allowedTools?.has(toolCall.toolName)) {
+      return Promise.resolve("allow-once");
+    }
+
+    return new Promise<ApprovalDecision>((resolve) => {
+      setPendingApproval({
+        toolCall,
+        resolve: (decision) => {
+          if (decision === "allow-conversation") {
+            const existing = conversationApprovals.current.get(activeConversation.id) ?? new Set<string>();
+            existing.add(toolCall.toolName);
+            conversationApprovals.current.set(activeConversation.id, existing);
+          }
+          setPendingApproval(null);
+          resolve(decision);
+        },
+      });
+    });
+  };
+
   const handleNewChat = () => {
     const preferredModel = availableModels.length
       ? pickPreferredModel(availableModels, appSettings.lastModelId)
@@ -342,7 +473,10 @@ export default function App() {
       retry: {
         maxAttempts: 2,
       },
-      providerComplete: activeProvider.complete,
+      tools: availableTools.length ? availableTools : undefined,
+      executeTool,
+      requestApproval,
+      providerComplete: (providerInput) => completeWithToolRiskOverrides(activeProvider, providerInput, toolRiskByName),
       onEvent: (event: RunEvent) => dispatchRunState({ type: "event", event }),
     });
 
@@ -402,6 +536,8 @@ export default function App() {
         isCanvasOpen={isCanvasOpen}
         availableModels={availableModels}
         submitShortcut={appSettings.submitShortcut}
+        pendingApprovalToolCall={pendingApproval?.toolCall ?? null}
+        onApprovalDecision={(decision) => pendingApproval?.resolve(decision)}
         onCancelRun={handleCancelRun}
         onModelChange={handleModelChange}
         onToggleCanvas={() => setIsCanvasOpen((current) => !current)}
@@ -414,6 +550,10 @@ export default function App() {
           onProviderConfigsChange={setProviderConfigs}
           localModels={localModels}
           onLocalModelsChange={setLocalModels}
+          mcpServers={mcpServers}
+          onMcpServersChange={setMcpServers}
+          mcpConnections={mcpConnections}
+          onMcpConnectionsChange={setMcpConnections}
           appSettings={appSettings}
           onAppSettingsChange={handleAppSettingsChange}
           onClose={() => setShowSettings(false)}

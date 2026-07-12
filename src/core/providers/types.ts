@@ -14,10 +14,20 @@ export interface ProviderResponse {
   toolCalls: ToolCallEvent[];
 }
 
+export interface ProviderToolSchema {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters: unknown;
+  };
+}
+
 export interface ProviderCompleteInput {
   messages: ChatMessage[];
   signal?: AbortSignal;
   onDelta?: (delta: string) => void;
+  tools?: ProviderToolSchema[];
 }
 
 export interface ChatProvider {

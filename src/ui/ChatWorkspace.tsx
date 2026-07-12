@@ -1,7 +1,8 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
 import { PanelRightOpen, Send, Square } from "lucide-react";
-import type { Conversation } from "../core/conversation/types";
+import type { Conversation, ToolCallEvent } from "../core/conversation/types";
 import type { ChatRunState } from "../core/chat-state/chatRunReducer";
+import type { ApprovalDecision } from "../core/agent-loop/types";
 import type { ProviderModel } from "../core/providers/types";
 import type { SubmitShortcut } from "../core/settings/appSettings";
 
@@ -12,6 +13,8 @@ interface ChatWorkspaceProps {
   isCanvasOpen: boolean;
   availableModels: ProviderModel[];
   submitShortcut: SubmitShortcut;
+  pendingApprovalToolCall: ToolCallEvent | null;
+  onApprovalDecision: (decision: ApprovalDecision) => void;
   onCancelRun: () => void;
   onModelChange: (model: ProviderModel) => void;
   onToggleCanvas: () => void;
@@ -25,6 +28,8 @@ export function ChatWorkspace({
   isCanvasOpen,
   availableModels,
   submitShortcut,
+  pendingApprovalToolCall,
+  onApprovalDecision,
   onCancelRun,
   onModelChange,
   onToggleCanvas,
@@ -191,6 +196,27 @@ export function ChatWorkspace({
                     <p>{toolCall.result ?? toolCall.denialReason ?? toolCall.summary}</p>
                   </div>
                 ))}
+              </div>
+            ) : null}
+            {pendingApprovalToolCall ? (
+              <div className="approval-card" role="alert">
+                <strong>{pendingApprovalToolCall.toolName}</strong>
+                <span>
+                  {pendingApprovalToolCall.serverName} · {pendingApprovalToolCall.risk}
+                </span>
+                <p>{pendingApprovalToolCall.summary}</p>
+                {pendingApprovalToolCall.arguments ? <code>{pendingApprovalToolCall.arguments}</code> : null}
+                <div className="approval-actions">
+                  <button type="button" onClick={() => onApprovalDecision("allow-once")}>
+                    Allow once
+                  </button>
+                  <button type="button" onClick={() => onApprovalDecision("allow-conversation")}>
+                    Allow for this conversation
+                  </button>
+                  <button type="button" className="approval-deny" onClick={() => onApprovalDecision("deny")}>
+                    Deny
+                  </button>
+                </div>
               </div>
             ) : null}
           </article>

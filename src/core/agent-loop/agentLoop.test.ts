@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import type { Conversation } from "../conversation/types";
-import type { ProviderCompleteInput, ProviderResponse } from "../providers/types";
+import type { ProviderCompleteInput, ProviderResponse, ProviderToolSchema } from "../providers/types";
+import { toOpenAIWireMessages } from "../providers/openAIChatStream";
 import type { RunEvent } from "./types";
 import { runAgentLoop } from "./agentLoop";
 
@@ -299,5 +300,299 @@ describe("runAgentLoop", () => {
     expect(capturedInput?.messages).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ content: "The provider request failed." })]),
     );
+  });
+});
+
+describe("runAgentLoop with real tool execution", () => {
+  test("executes an approved tool call and continues the loop for a final answer", async () => {
+    let step = 0;
+    const executeTool = vi.fn(async () => ({ content: "Artifact created.", isError: false }));
+    const requestApproval = vi.fn(async () => "allow-once" as const);
+
+    const result = await runAgentLoop({
+      conversation: testConversation,
+      input: "create an artifact",
+      executeTool,
+      requestApproval,
+      providerComplete: async () => {
+        step += 1;
+        return step === 1 ? createToolCallResponse() : createTextResponse("Done, artifact created.");
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.message.content).toBe("Done, artifact created.");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(requestApproval).toHaveBeenCalledTimes(1);
+    expect(result.message.toolCalls?.[0]?.status).toBe("completed");
+    expect(result.events.map((event) => event.type)).toEqual([
+      "run_started",
+      "model_request_started",
+      "tool_call_requested",
+      "tool_call_awaiting_approval",
+      "tool_execution_started",
+      "tool_result_returned",
+      "model_request_started",
+      "assistant_text_delta",
+      "assistant_message_completed",
+      "run_completed",
+    ]);
+  });
+
+  test("feeds the tool result back to the model as a tool message with matching toolCallId", async () => {
+    let callCount = 0;
+    const capturedInputs: ProviderCompleteInput[] = [];
+    const toolCallId = crypto.randomUUID();
+
+    const result = await runAgentLoop({
+      conversation: testConversation,
+      input: "create an artifact",
+      executeTool: async () => ({ content: "Artifact created.", isError: false }),
+      requestApproval: async () => "allow-once",
+      providerComplete: async (providerInput) => {
+        capturedInputs.push(providerInput);
+        callCount += 1;
+        if (callCount === 1) {
+          const toolCalls: ProviderResponse["toolCalls"] = [
+            {
+              id: toolCallId,
+              serverName: "Canvas",
+              toolName: "create_artifact",
+              status: "awaiting-approval",
+              risk: "write",
+              summary: "Create a new canvas artifact.",
+            },
+          ];
+          return {
+            message: {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              createdAt: "2026-07-11T00:00:00.000Z",
+              content: "",
+              toolCalls,
+            },
+            toolCalls,
+          };
+        }
+        return createTextResponse("Done.");
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(capturedInputs[1]?.messages).toEqual(
+      expect.arrayContaining([expect.objectContaining({ role: "tool", toolCallId, content: "Artifact created." })]),
+    );
+  });
+
+  test("executes the tool when the approval decision is allow-conversation", async () => {
+    let step = 0;
+
+    const result = await runAgentLoop({
+      conversation: testConversation,
+      input: "create an artifact",
+      executeTool: async () => ({ content: "Artifact created.", isError: false }),
+      requestApproval: async () => "allow-conversation",
+      providerComplete: async () => {
+        step += 1;
+        return step === 1 ? createToolCallResponse() : createTextResponse("Done.");
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.events.map((event) => event.type)).toContain("tool_result_returned");
+  });
+
+  test("denies via requestApproval by feeding a denial back to the model and continuing", async () => {
+    let step = 0;
+    const executeTool = vi.fn(async () => ({ content: "should not run", isError: false }));
+
+    const result = await runAgentLoop({
+      conversation: testConversation,
+      input: "create an artifact",
+      executeTool,
+      requestApproval: async () => "deny",
+      providerComplete: async () => {
+        step += 1;
+        return step === 1 ? createToolCallResponse() : createTextResponse("Understood, I will not create it.");
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.message.content).toBe("Understood, I will not create it.");
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(result.message.toolCalls?.[0]?.status).toBe("failed");
+    expect(result.events.map((event) => event.type)).toEqual([
+      "run_started",
+      "model_request_started",
+      "tool_call_requested",
+      "tool_call_awaiting_approval",
+      "tool_call_denied",
+      "model_request_started",
+      "assistant_text_delta",
+      "assistant_message_completed",
+      "run_completed",
+    ]);
+  });
+
+  test("executes read-risk tools immediately without prompting for approval", async () => {
+    let step = 0;
+    const requestApproval = vi.fn(async () => "allow-once" as const);
+    const executeTool = vi.fn(async () => ({ content: "Plan contents.", isError: false }));
+
+    const result = await runAgentLoop({
+      conversation: testConversation,
+      input: "read the plan",
+      executeTool,
+      requestApproval,
+      providerComplete: async () => {
+        step += 1;
+        if (step === 1) {
+          const toolCalls: ProviderResponse["toolCalls"] = [
+            {
+              id: crypto.randomUUID(),
+              serverName: "Local project",
+              toolName: "read_plan",
+              status: "queued",
+              risk: "read",
+              summary: "Reads local product planning notes.",
+            },
+          ];
+          return {
+            message: {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              createdAt: "2026-07-11T00:00:00.000Z",
+              content: "",
+              toolCalls,
+            },
+            toolCalls,
+          };
+        }
+        return createTextResponse("Here is the plan.");
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(requestApproval).not.toHaveBeenCalled();
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  test("fails when tool calls accumulated across steps exceed the configured limit", async () => {
+    let step = 0;
+
+    const result = await runAgentLoop({
+      conversation: testConversation,
+      input: "create two artifacts",
+      limits: { maxModelSteps: 8, maxToolCalls: 1 },
+      executeTool: async () => ({ content: "done", isError: false }),
+      requestApproval: async () => "allow-once",
+      providerComplete: async () => {
+        step += 1;
+        return step <= 2 ? createToolCallResponse() : createTextResponse("Done.");
+      },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.events.at(-1)).toMatchObject({
+      type: "run_failed",
+      reason: "tool_call_limit_reached",
+    });
+  });
+
+  test("fails when the model keeps calling tools past the model step limit", async () => {
+    const result = await runAgentLoop({
+      conversation: testConversation,
+      input: "loop forever",
+      limits: { maxModelSteps: 2, maxToolCalls: 16 },
+      executeTool: async () => ({ content: "done", isError: false }),
+      requestApproval: async () => "allow-once",
+      providerComplete: async () => createToolCallResponse(),
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.events.at(-1)).toMatchObject({
+      type: "run_failed",
+      reason: "model_step_limit_reached",
+    });
+  });
+
+  test("exposes a transcript so a completed tool call's assistant/tool messages can be persisted for the next turn", async () => {
+    let step = 0;
+    const toolCallId = crypto.randomUUID();
+
+    const result = await runAgentLoop({
+      conversation: testConversation,
+      input: "create an artifact",
+      executeTool: async () => ({ content: "Artifact created.", isError: false }),
+      requestApproval: async () => "allow-once",
+      providerComplete: async () => {
+        step += 1;
+        if (step === 1) {
+          const toolCalls: ProviderResponse["toolCalls"] = [
+            {
+              id: toolCallId,
+              serverName: "Canvas",
+              toolName: "create_artifact",
+              status: "awaiting-approval",
+              risk: "write",
+              summary: "Create a new canvas artifact.",
+            },
+          ];
+          return {
+            message: {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              createdAt: "2026-07-11T00:00:00.000Z",
+              content: "",
+              toolCalls,
+            },
+            toolCalls,
+          };
+        }
+        return createTextResponse("Done.");
+      },
+    });
+
+    expect(result.status).toBe("completed");
+    expect(result.transcript).toEqual([
+      expect.objectContaining({ role: "assistant", toolCalls: expect.arrayContaining([expect.objectContaining({ id: toolCallId })]) }),
+      expect.objectContaining({ role: "tool", toolCallId, content: "Artifact created." }),
+    ]);
+
+    // Replaying transcript + final message as the seed for a follow-up turn must never
+    // produce an orphaned tool_calls entry on the wire, whether or not a persisted message
+    // still carries `toolCalls` for its own UI tool-card display.
+    const nextTurnSeed = [...testConversation.messages, ...result.transcript, result.message];
+    const wireMessages = toOpenAIWireMessages(nextTurnSeed);
+    for (const wireMessage of wireMessages) {
+      if ("tool_calls" in wireMessage) {
+        const answeredIds = new Set(
+          wireMessages
+            .filter((candidate): candidate is { role: string; tool_call_id: string } => candidate.role === "tool")
+            .map((candidate) => candidate.tool_call_id),
+        );
+        const toolCalls = wireMessage.tool_calls as Array<{ id: string }>;
+        for (const toolCall of toolCalls) {
+          expect(answeredIds.has(toolCall.id)).toBe(true);
+        }
+      }
+    }
+  });
+
+  test("passes the tools schema through to the provider on every request", async () => {
+    const tools: ProviderToolSchema[] = [{ type: "function", function: { name: "echo", parameters: {} } }];
+    const capturedInputs: ProviderCompleteInput[] = [];
+
+    await runAgentLoop({
+      conversation: testConversation,
+      input: "hello",
+      tools,
+      providerComplete: async (providerInput) => {
+        capturedInputs.push(providerInput);
+        return createTextResponse("hi");
+      },
+    });
+
+    expect(capturedInputs[0]?.tools).toBe(tools);
   });
 });

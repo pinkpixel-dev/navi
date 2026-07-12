@@ -8,6 +8,8 @@ export type RunCancellationReason = "user_cancelled";
 
 export type ApprovalPolicy = "allow-all" | "deny-writes";
 
+export type ApprovalDecision = "allow-once" | "allow-conversation" | "deny";
+
 export interface RunLimits {
   maxModelSteps: number;
   maxToolCalls: number;
@@ -106,5 +108,11 @@ export interface AgentRunResult {
   id: string;
   status: Exclude<RunStatus, "idle" | "running" | "awaiting-approval">;
   message: ChatMessage;
+  /**
+   * Assistant tool-call and tool-result messages exchanged during this run, in order,
+   * NOT including `message` itself. Must be persisted ahead of `message` in conversation
+   * history so a later turn's tool_calls/tool_call_id pairing stays valid for the provider.
+   */
+  transcript: ChatMessage[];
   events: RunEvent[];
 }

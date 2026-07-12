@@ -1,5 +1,5 @@
 import type { ChatMessage, ToolCallEvent } from "../conversation/types";
-import { streamOpenAIChatCompletion, type StreamedToolCall } from "./openAIChatStream";
+import { streamOpenAIChatCompletion, toOpenAIWireMessages, type StreamedToolCall } from "./openAIChatStream";
 import type { ChatProvider, ProviderCompleteInput, ProviderModel, ProviderResponse } from "./types";
 
 type Fetcher = typeof fetch;
@@ -21,13 +21,6 @@ interface OpenAIModelsResponse {
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
-}
-
-function toOpenAIMessage(message: ChatMessage) {
-  return {
-    role: message.role === "tool" ? "user" : message.role,
-    content: message.content,
-  };
 }
 
 function toolCallRisk(toolName: string): ToolCallEvent["risk"] {
@@ -55,6 +48,7 @@ function normalizeToolCall(toolCall: StreamedToolCall): ToolCallEvent {
     status: "queued",
     risk: toolCallRisk(toolName),
     summary: `Provider requested ${toolName} with ${rawArguments}.`,
+    arguments: rawArguments,
   };
 }
 
@@ -109,8 +103,9 @@ export function createOpenAIProvider(config: OpenAIProviderConfig): ChatProvider
         headers: { Authorization: `Bearer ${config.apiKey}` },
         body: {
           model: config.model,
-          messages: input.messages.map(toOpenAIMessage),
+          messages: toOpenAIWireMessages(input.messages),
           stream: true,
+          ...(input.tools?.length ? { tools: input.tools } : {}),
         },
         signal: input.signal,
         errorPrefix: "OpenAI provider request failed",

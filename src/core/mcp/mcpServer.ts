@@ -15,10 +15,23 @@ export interface McpServerConfig {
   headers?: Record<string, string>;
 }
 
+export interface McpToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
 export interface McpTool {
   name: string;
   description?: string;
   inputSchema?: unknown;
+  annotations?: McpToolAnnotations;
+}
+
+export interface McpToolCallResult {
+  content: string;
+  isError: boolean;
 }
 
 export interface McpResource {
@@ -51,6 +64,12 @@ export interface McpServerDriver {
   connectServer: (config: McpServerConfig) => Promise<McpServerStatus>;
   disconnectServer: (id: string) => Promise<void>;
   getServerStatus: (id: string) => Promise<McpServerStatus>;
+  callTool: (serverId: string, toolName: string, argumentsJson: string) => Promise<McpToolCallResult>;
+}
+
+interface RawCallToolResult {
+  content?: Array<{ type?: string; text?: string }>;
+  isError?: boolean;
 }
 
 export function createTauriMcpServerDriver(): McpServerDriver {
@@ -62,6 +81,29 @@ export function createTauriMcpServerDriver(): McpServerDriver {
     connectServer: (config) => invoke<McpServerStatus>("connect_mcp_server", { config }),
     disconnectServer: (id) => invoke<void>("disconnect_mcp_server", { id }),
     getServerStatus: (id) => invoke<McpServerStatus>("get_mcp_server_status", { id }),
+    async callTool(serverId, toolName, argumentsJson) {
+      let parsedArguments: unknown = {};
+      try {
+        parsedArguments = argumentsJson ? JSON.parse(argumentsJson) : {};
+      } catch {
+        parsedArguments = {};
+      }
+
+      const result = await invoke<RawCallToolResult>("call_mcp_tool", {
+        serverId,
+        toolName,
+        arguments: parsedArguments,
+      });
+
+      const textParts = (result.content ?? [])
+        .filter((block) => block.type === "text" && typeof block.text === "string")
+        .map((block) => block.text as string);
+
+      return {
+        content: textParts.length ? textParts.join("\n") : JSON.stringify(result),
+        isError: Boolean(result.isError),
+      };
+    },
   };
 }
 
@@ -85,6 +127,7 @@ export function createUnsupportedMcpServerDriver(): McpServerDriver {
     connectServer: unsupported,
     disconnectServer: () => Promise.resolve(),
     getServerStatus: () => Promise.resolve(idleStatus),
+    callTool: unsupported,
   };
 }
 

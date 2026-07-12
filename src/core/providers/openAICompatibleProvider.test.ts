@@ -125,6 +125,73 @@ describe("openAI compatible provider", () => {
     );
   });
 
+  test("includes the tools schema in the request body when tools are provided", async () => {
+    const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: { content: "ok" } }] }]));
+    const provider = createOpenAICompatibleProvider({
+      baseUrl: "https://example.com",
+      model: "hosted-model",
+      fetcher,
+    });
+
+    await provider.complete({
+      messages: [],
+      tools: [{ type: "function", function: { name: "echo", description: "Echoes input", parameters: {} } }],
+    });
+
+    const [, requestInit] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(requestInit.body as string);
+    expect(body.tools).toEqual([{ type: "function", function: { name: "echo", description: "Echoes input", parameters: {} } }]);
+  });
+
+  test("serializes an assistant tool-call message and its tool result with matching tool_call_id", async () => {
+    const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: { content: "ok" } }] }]));
+    const provider = createOpenAICompatibleProvider({
+      baseUrl: "https://example.com",
+      model: "hosted-model",
+      fetcher,
+    });
+
+    await provider.complete({
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          content: "",
+          createdAt: "2026-07-11T00:00:00.000Z",
+          toolCalls: [
+            {
+              id: "call-1",
+              serverName: "Canvas",
+              toolName: "create_artifact",
+              status: "completed",
+              risk: "write",
+              summary: "Create an artifact.",
+              arguments: '{"title":"Notes"}',
+            },
+          ],
+        },
+        {
+          id: "tool-result-1",
+          role: "tool",
+          content: "Artifact created.",
+          createdAt: "2026-07-11T00:00:00.000Z",
+          toolCallId: "call-1",
+        },
+      ],
+    });
+
+    const [, requestInit] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    const body = JSON.parse(requestInit.body as string);
+    expect(body.messages).toEqual([
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "call-1", type: "function", function: { name: "create_artifact", arguments: '{"title":"Notes"}' } }],
+      },
+      { role: "tool", tool_call_id: "call-1", content: "Artifact created." },
+    ]);
+  });
+
   test("fetches compatible provider models", async () => {
     const fetcher = vi.fn(async () =>
       new Response(

@@ -1,4 +1,4 @@
-use rmcp::model::{ClientCapabilities, ClientInfo, Implementation};
+use rmcp::model::{CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{ConfigureCommandExt, StreamableHttpClientTransport, TokioChildProcess};
 use rmcp::{Peer, RoleClient, ServiceExt};
@@ -184,6 +184,31 @@ pub async fn disconnect(app: &AppHandle, id: &str) -> Result<(), String> {
     let mut connections = state.0.lock().await;
     connections.remove(id);
     Ok(())
+}
+
+pub async fn call_tool(app: &AppHandle, server_id: &str, tool_name: String, arguments: Value) -> Result<Value, String> {
+    use tauri::Manager;
+
+    let peer = {
+        let state = app.state::<McpManagerState>();
+        let connections = state.0.lock().await;
+        connections
+            .get(server_id)
+            .cloned()
+            .ok_or_else(|| format!("MCP server '{server_id}' is not connected"))?
+    };
+
+    let mut params = CallToolRequestParams::new(tool_name);
+    if let Some(arguments_object) = arguments.as_object().cloned() {
+        params = params.with_arguments(arguments_object);
+    }
+
+    let result = peer
+        .call_tool(params)
+        .await
+        .map_err(|error| format!("Tool call failed: {error}"))?;
+
+    serde_json::to_value(&result).map_err(|error| format!("Could not encode tool result: {error}"))
 }
 
 pub async fn status(app: &AppHandle, id: &str) -> Value {
