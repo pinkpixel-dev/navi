@@ -272,6 +272,27 @@ describe("runAgentLoop", () => {
     expect(result.message.content).toBe("Provider answered.");
   });
 
+  test("passes attachments through to provider completion", async () => {
+    let capturedInput: ProviderCompleteInput | undefined;
+    const complete = vi.fn(async (input: ProviderCompleteInput) => {
+      capturedInput = input;
+      return createTextResponse("I can see it.");
+    });
+
+    await runAgentLoop({
+      conversation: testConversation,
+      input: "What is attached?",
+      attachments: [{ id: "att-1", kind: "text", name: "notes.md", mimeType: "text/markdown", data: "# Notes" }],
+      providerComplete: complete,
+    });
+
+    expect(capturedInput?.messages.at(-1)).toMatchObject({
+      role: "user",
+      content: "What is attached?",
+      attachments: [{ name: "notes.md", data: "# Notes" }],
+    });
+  });
+
   test("does not send internal provider failure messages back to injected providers", async () => {
     let capturedInput: ProviderCompleteInput | undefined;
     const complete = vi.fn(async (input: ProviderCompleteInput) => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { CSSProperties, PointerEvent, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { CanvasPanel } from "./ui/CanvasPanel";
 import { ChatWorkspace } from "./ui/ChatWorkspace";
 import { Sidebar } from "./ui/Sidebar";
@@ -34,6 +34,8 @@ const providerConfigRepository = createDefaultProviderConfigRepository();
 const localModelRepository = createDefaultLocalModelRepository();
 const llamaRuntimeDriver = createDefaultLlamaRuntimeDriver();
 const mcpServerDriver = createDefaultMcpServerDriver();
+const sidebarWidthStorageKey = "navi.sidebarWidth";
+const canvasWidthStorageKey = "navi.canvasWidth";
 
 interface PendingApproval {
   toolCall: ToolCallEvent;
@@ -149,6 +151,8 @@ export default function App() {
   const [runState, dispatchRunState] = useReducer(chatRunReducer, undefined, createInitialChatRunState);
   const [activeRunController, setActiveRunController] = useState<AbortController | null>(null);
   const [isCanvasOpen, setIsCanvasOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(() => Number(localStorage.getItem(sidebarWidthStorageKey)) || 280);
+  const [canvasWidth, setCanvasWidth] = useState(() => Number(localStorage.getItem(canvasWidthStorageKey)) || 520);
   const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
   const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [showSettings, setShowSettings] = useState(false);
@@ -288,6 +292,44 @@ export default function App() {
     }
     lastOpenedArtifactId.current = latestArtifact?.id ?? null;
   }, [latestArtifact]);
+
+  useEffect(() => {
+    localStorage.setItem(sidebarWidthStorageKey, String(sidebarWidth));
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    localStorage.setItem(canvasWidthStorageKey, String(canvasWidth));
+  }, [canvasWidth]);
+
+  const handleSidebarResizeStart = (event: PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = sidebarWidth;
+    const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+      setSidebarWidth(Math.min(460, Math.max(220, startWidth + moveEvent.clientX - startX)));
+    };
+    const handlePointerUp = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
+
+  const handleCanvasResizeStart = (event: PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = canvasWidth;
+    const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
+      setCanvasWidth(Math.min(900, Math.max(340, startWidth - (moveEvent.clientX - startX))));
+    };
+    const handlePointerUp = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  };
 
   const handleAppSettingsChange = (nextSettings: AppSettings) => {
     setAppSettings(nextSettings);
@@ -468,6 +510,7 @@ export default function App() {
     const runResult = await runAgentLoop({
       conversation: activeConversation,
       input: content,
+      attachments,
       signal: controller.signal,
       retry: {
         maxAttempts: 2,
@@ -562,20 +605,6 @@ export default function App() {
     });
   };
 
-  const handleSetConversationProject = (id: string, projectName: string) => {
-    const trimmed = projectName.trim();
-    const target = conversations.find((conversation) => conversation.id === id);
-    if (!target || !trimmed || target.projectName === trimmed) {
-      return;
-    }
-
-    const updated: Conversation = { ...target, projectName: trimmed };
-    setConversations((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
-    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
-      console.error("Could not save project assignment", error);
-    });
-  };
-
   const handleRenameConversation = (id: string, title: string) => {
     const trimmed = title.trim();
     if (!trimmed) {
@@ -612,8 +641,13 @@ export default function App() {
     handleAppSettingsChange({ ...appSettings, lastModelId: model.id });
   };
 
+  const layoutStyle = {
+    "--sidebar-width": `${sidebarWidth}px`,
+    "--canvas-width": `${canvasWidth}px`,
+  } as CSSProperties;
+
   return (
-    <main className={isCanvasOpen ? "app-shell" : "app-shell canvas-collapsed"}>
+    <main className={isCanvasOpen ? "app-shell" : "app-shell canvas-collapsed"} style={layoutStyle}>
       <Sidebar
         activeConversationId={activeConversation.id}
         conversations={conversations}
@@ -624,7 +658,7 @@ export default function App() {
         onTogglePin={handleTogglePin}
         onToggleArchive={handleToggleArchive}
         onRenameConversation={handleRenameConversation}
-        onSetConversationProject={handleSetConversationProject}
+        onResizeStart={handleSidebarResizeStart}
       />
       <ChatWorkspace
         conversation={activeConversation}
@@ -642,7 +676,9 @@ export default function App() {
         onToggleCanvas={() => setIsCanvasOpen((current) => !current)}
         onSend={handleSend}
       />
-      {isCanvasOpen ? <CanvasPanel groups={artifactGroups} onClose={() => setIsCanvasOpen(false)} /> : null}
+      {isCanvasOpen ? (
+        <CanvasPanel groups={artifactGroups} onResizeStart={handleCanvasResizeStart} onClose={() => setIsCanvasOpen(false)} />
+      ) : null}
       {showSettings ? (
         <SettingsPanel
           providerConfigs={providerConfigs}

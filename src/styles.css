@@ -41,7 +41,7 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 280px minmax(420px, 1fr) minmax(340px, 0.48fr);
+  grid-template-columns: var(--sidebar-width, 280px) minmax(420px, 1fr) minmax(340px, var(--canvas-width, 520px));
   grid-template-rows: minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
@@ -49,7 +49,7 @@ button {
 }
 
 .app-shell.canvas-collapsed {
-  grid-template-columns: 280px minmax(420px, 1fr);
+  grid-template-columns: var(--sidebar-width, 280px) minmax(420px, 1fr);
 }
 
 .sidebar,
@@ -60,6 +60,7 @@ button {
 }
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -67,6 +68,30 @@ button {
   padding: 18px;
   overflow: hidden;
   border-width: 0 1px 0 0;
+}
+
+.sidebar-resizer,
+.canvas-resizer {
+  position: absolute;
+  top: 0;
+  z-index: 5;
+  width: 8px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.sidebar-resizer {
+  right: -4px;
+}
+
+.canvas-resizer {
+  left: -4px;
+}
+
+.sidebar-resizer:hover,
+.canvas-resizer:hover {
+  background: rgba(124, 231, 255, 0.12);
 }
 
 .sidebar > * {
@@ -187,6 +212,7 @@ button {
 }
 
 .chat-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -240,16 +266,26 @@ button {
 }
 
 .chat-row-actions {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   gap: 2px;
-  flex-shrink: 0;
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.1s ease;
 }
 
 .chat-row:hover .chat-row-actions,
 .chat-row:focus-within .chat-row-actions {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-row:hover .chat-row-select,
+.chat-row:focus-within .chat-row-select {
+  padding-right: 108px;
 }
 
 .chat-row-actions button {
@@ -715,13 +751,14 @@ button {
 }
 
 .message-avatar {
-  width: 28px;
-  height: 28px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   object-fit: cover;
 }
 
 .canvas-panel {
+  position: relative;
   display: grid;
   grid-template-rows: auto 1fr;
   min-width: 0;
@@ -958,8 +995,8 @@ button {
 }
 
 .settings-panel {
-  width: min(860px, 100%);
-  max-height: min(720px, calc(100vh - 48px));
+  width: min(1380px, calc(100vw - 36px));
+  max-height: min(940px, calc(100vh - 32px));
   overflow: auto;
   border: 1px solid #262a30;
   border-radius: 10px;
@@ -973,7 +1010,83 @@ button {
   padding: 20px;
 }
 
+.settings-section-header,
+.settings-modal header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-section-header h3,
+.settings-modal h3 {
+  margin: 0;
+}
+
+.settings-section-header button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #262a30;
+  border-radius: 8px;
+  color: #f7f7f5;
+  background: #181a1e;
+}
+
+.settings-local-models {
+  order: 2;
+}
+
+.settings-general {
+  order: 3;
+}
+
+.settings-avatars {
+  order: 4;
+}
+
+.settings-mcp-servers {
+  order: 5;
+}
+
+.settings-grid > .settings-form:not(.settings-local-models):not(.settings-general):not(.settings-avatars) {
+  order: 6;
+}
+
+.settings-modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 9, 10, 0.64);
+}
+
+.settings-modal {
+  width: min(860px, calc(100vw - 48px));
+  max-height: min(780px, calc(100vh - 60px));
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid #2d323a;
+  border-radius: 10px;
+  background: #101114;
+}
+
+.settings-modal header {
+  margin-bottom: 6px;
+}
+
 .settings-form {
+  display: grid;
+  gap: 10px;
+  grid-column: 1 / -1;
+}
+
+.settings-section {
   display: grid;
   gap: 10px;
   grid-column: 1 / -1;
@@ -1042,16 +1155,65 @@ button {
 }
 
 .settings-row-button:hover,
-.settings-row-button.active {
+.settings-row-button.active,
+.settings-clickable-card:hover,
+.settings-clickable-card.active {
   border-color: #3a3f48;
+  background: #181a1e;
+}
+
+.settings-clickable-card {
+  cursor: pointer;
+}
+
+.settings-card-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.settings-card {
+  display: grid;
+  gap: 6px;
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid #262a30;
+  border-radius: 8px;
+  background: #131519;
+  color: #f7f7f5;
+  text-align: left;
+}
+
+.settings-card span {
+  color: #9da3ad;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.settings-card-actions {
+  display: flex;
+  gap: 8px;
+  align-self: end;
+  justify-self: end;
+}
+
+.settings-card-actions button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid #262a30;
+  border-radius: 6px;
+  color: #f7f7f5;
   background: #181a1e;
 }
 
 .settings-model-list {
   max-height: 220px;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 4px;
   border: 1px solid #262a30;
   border-radius: 8px;
@@ -1098,8 +1260,8 @@ button {
 }
 
 .settings-avatar {
-  width: 36px;
-  height: 36px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   border: 1px solid #262a30;
   object-fit: cover;

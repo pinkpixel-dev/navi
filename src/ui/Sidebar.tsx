@@ -1,8 +1,7 @@
-import { KeyboardEvent, useMemo, useState } from "react";
+import { KeyboardEvent, PointerEvent, useMemo, useState } from "react";
 import {
   Archive,
   ArchiveRestore,
-  FolderInput,
   MessageSquarePlus,
   Pencil,
   Pin,
@@ -26,10 +25,10 @@ interface SidebarProps {
   onTogglePin: (conversationId: string) => void;
   onToggleArchive: (conversationId: string) => void;
   onRenameConversation: (conversationId: string, title: string) => void;
-  onSetConversationProject: (conversationId: string, projectName: string) => void;
+  onResizeStart: (event: PointerEvent<HTMLDivElement>) => void;
 }
 
-type RowEditMode = "rename" | "project" | null;
+type RowEditMode = "rename" | null;
 
 interface ChatRowProps {
   conversation: Conversation;
@@ -37,7 +36,7 @@ interface ChatRowProps {
   editMode: RowEditMode;
   editDraft: string;
   onSelect: () => void;
-  onStartEdit: (mode: Exclude<RowEditMode, null>) => void;
+  onStartEdit: () => void;
   onEditDraftChange: (value: string) => void;
   onCommitEdit: () => void;
   onCancelEdit: () => void;
@@ -78,8 +77,7 @@ function ChatRow({
           <input
             className="chat-row-rename-input"
             autoFocus
-            aria-label={editMode === "rename" ? "Rename chat" : "Move chat to project"}
-            placeholder={editMode === "project" ? "Project name" : undefined}
+            aria-label="Rename chat"
             value={editDraft}
             onClick={(event) => event.stopPropagation()}
             onChange={(event) => onEditDraftChange(event.target.value)}
@@ -109,20 +107,10 @@ function ChatRow({
           aria-label={`Rename ${conversation.title}`}
           onClick={(event) => {
             event.stopPropagation();
-            onStartEdit("rename");
+            onStartEdit();
           }}
         >
           <Pencil size={13} />
-        </button>
-        <button
-          type="button"
-          aria-label={`Move ${conversation.title} to a project`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onStartEdit("project");
-          }}
-        >
-          <FolderInput size={13} />
         </button>
         <button
           type="button"
@@ -159,7 +147,7 @@ export function Sidebar({
   onTogglePin,
   onToggleArchive,
   onRenameConversation,
-  onSetConversationProject,
+  onResizeStart,
 }: SidebarProps) {
   const [searchText, setSearchText] = useState("");
   const [projectFilter, setProjectFilter] = useState(allProjectsFilter);
@@ -178,17 +166,15 @@ export function Sidebar({
     return Array.from(names).sort((a, b) => a.localeCompare(b));
   }, [conversations]);
 
-  const startEdit = (conversation: Conversation, mode: Exclude<RowEditMode, null>) => {
+  const startEdit = (conversation: Conversation) => {
     setEditingId(conversation.id);
-    setEditMode(mode);
-    setEditDraft(mode === "rename" ? conversation.title : conversation.projectName);
+    setEditMode("rename");
+    setEditDraft(conversation.title);
   };
 
   const commitEdit = () => {
     if (editingId && editMode === "rename") {
       onRenameConversation(editingId, editDraft);
-    } else if (editingId && editMode === "project") {
-      onSetConversationProject(editingId, editDraft);
     }
     setEditingId(null);
     setEditMode(null);
@@ -226,7 +212,7 @@ export function Sidebar({
       editMode={conversation.id === editingId ? editMode : null}
       editDraft={editDraft}
       onSelect={() => onSelectConversation(conversation.id)}
-      onStartEdit={(mode) => startEdit(conversation, mode)}
+      onStartEdit={() => startEdit(conversation)}
       onEditDraftChange={setEditDraft}
       onCommitEdit={commitEdit}
       onCancelEdit={cancelEdit}
@@ -309,6 +295,7 @@ export function Sidebar({
         <Settings size={16} />
         Settings
       </button>
+      <div className="sidebar-resizer" role="separator" aria-label="Resize sidebar" onPointerDown={onResizeStart} />
     </aside>
   );
 }

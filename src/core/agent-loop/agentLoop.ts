@@ -1,4 +1,4 @@
-import type { ChatMessage, Conversation, ToolCallEvent } from "../conversation/types";
+import type { ChatMessage, Conversation, MessageAttachment, ToolCallEvent } from "../conversation/types";
 import type { ProviderCompleteInput, ProviderResponse, ProviderToolSchema } from "../providers/types";
 import type { AgentRunResult, ApprovalDecision, ApprovalPolicy, RunEvent, RunLimits, RunRetryPolicy } from "./types";
 
@@ -11,6 +11,7 @@ interface ToolExecutionResult {
 interface RunAgentLoopInput {
   conversation: Conversation;
   input: string;
+  attachments?: MessageAttachment[];
   approvalPolicy?: ApprovalPolicy;
   limits?: RunLimits;
   retry?: RunRetryPolicy;
@@ -68,12 +69,13 @@ function createTimeoutMessage(): ChatMessage {
   return createFallbackMessage("The run timed out before the provider responded.");
 }
 
-function createUserMessage(content: string): ChatMessage {
+function createUserMessage(content: string, attachments?: MessageAttachment[]): ChatMessage {
   return {
     id: crypto.randomUUID(),
     role: "user",
     createdAt: createTimestamp(),
     content,
+    ...(attachments?.length ? { attachments } : {}),
   };
 }
 
@@ -99,8 +101,8 @@ function isProviderContextMessage(message: ChatMessage): boolean {
   return true;
 }
 
-function createProviderMessages(conversation: Conversation, input: string): ChatMessage[] {
-  return [...conversation.messages.filter(isProviderContextMessage), createUserMessage(input)];
+function createProviderMessages(conversation: Conversation, input: string, attachments?: MessageAttachment[]): ChatMessage[] {
+  return [...conversation.messages.filter(isProviderContextMessage), createUserMessage(input, attachments)];
 }
 
 async function runWithControls<T>(operation: () => Promise<T>, signal?: AbortSignal, timeoutMs?: number): Promise<T> {
@@ -151,6 +153,7 @@ async function runWithControls<T>(operation: () => Promise<T>, signal?: AbortSig
 export async function runAgentLoop({
   conversation,
   input,
+  attachments,
   approvalPolicy = "allow-all",
   limits = defaultLimits,
   retry = { maxAttempts: 1 },
@@ -193,7 +196,7 @@ export async function runAgentLoop({
     };
   }
 
-  const workingMessages = createProviderMessages(conversation, input);
+  const workingMessages = createProviderMessages(conversation, input, attachments);
   const seedLength = workingMessages.length;
   const allToolCalls: ToolCallEvent[] = [];
   let totalToolCallCount = 0;

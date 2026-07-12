@@ -21,18 +21,42 @@ interface GeminiModelsResponse {
   }>;
 }
 
-type GeminiPart =
-  | { text: string }
-  | { inlineData: { mimeType: string; data: string } }
-  | { functionCall: { name: string; args: unknown } }
-  | { functionResponse: { name: string; response: { result: string } } };
+type GeminiContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; mime_type: string; data: string }
+  | { type: "function_call"; id?: string; name: string; arguments: unknown };
 
-interface GeminiWireContent {
-  role: "user" | "model";
-  parts: GeminiPart[];
+type GeminiFunctionResult = { type: "text"; text: string };
+
+type GeminiInteractionStep =
+  | { type: "user_input"; content: GeminiContentBlock[] | string }
+  | { type: "model_output"; content: GeminiContentBlock[] }
+  | { type: "function_call"; id?: string; name: string; arguments: unknown }
+  | { type: "function_result"; call_id?: string; name: string; result: GeminiFunctionResult[] };
+
+interface GeminiStreamStep {
+  type?: string;
+  id?: string;
+  name?: string;
+  arguments?: unknown;
+  content?: Array<{ type?: string; text?: string }>;
+}
+
+interface GeminiStreamDelta {
+  type?: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  arguments?: unknown;
+  partial_arguments?: string;
 }
 
 interface GeminiStreamChunk {
+  event_type?: string;
+  index?: number;
+  step?: GeminiStreamStep;
+  delta?: GeminiStreamDelta;
+  interaction?: { steps?: GeminiStreamStep[]; outputs?: GeminiStreamStep[] };
   candidates?: Array<{
     content?: {
       parts?: Array<{
@@ -61,42 +85,42 @@ function toolCallRisk(toolName: string): ToolCallEvent["risk"] {
   return "read";
 }
 
-function attachmentToParts(attachment: MessageAttachment): GeminiPart[] {
+function attachmentToContentBlocks(attachment: MessageAttachment): GeminiContentBlock[] {
   if (attachment.kind === "image") {
-    return [{ inlineData: { mimeType: attachment.mimeType, data: attachment.data } }];
+    return [{ type: "image", mime_type: attachment.mimeType, data: attachment.data }];
   }
-  return [{ text: `Attached file "${attachment.name}":\n\n${attachment.data}` }];
+  return [{ type: "text", text: `Attached file "${attachment.name}":\n\n${attachment.data}` }];
 }
 
 /**
- * Gemini function-calling has no call ids — results are matched to calls by function
- * name. Tool-result messages here carry our internal toolCallId, so the conversion
- * resolves each result back to the assistant tool call it answers to recover the name.
+ * Gemini Interactions stateless mode expects a chronological list of typed steps.
+ * Tool-result messages carry our internal toolCallId, so the conversion resolves
+ * each result back to the assistant tool call it answers to recover the provider
+ * tool name.
  */
-export function toGeminiWireContents(messages: ChatMessage[]): {
-  systemInstruction?: { parts: Array<{ text: string }> };
-  contents: GeminiWireContent[];
+export function toGeminiInteractionInput(messages: ChatMessage[]): {
+  systemInstruction?: string;
+  input: GeminiInteractionStep[];
 } {
   const systemParts: string[] = [];
-  const contents: GeminiWireContent[] = [];
+  const input: GeminiInteractionStep[] = [];
   const toolNamesByCallId = new Map<string, string>();
+  const toolResultCallIds = new Set<string>();
 
   for (const message of messages) {
     for (const toolCall of message.toolCalls ?? []) {
       toolNamesByCallId.set(toolCall.id, toolCall.toolName);
     }
+    if (message.role === "tool" && message.toolCallId) {
+      toolResultCallIds.add(message.toolCallId);
+    }
   }
 
-  const pushParts = (role: "user" | "model", parts: GeminiPart[]) => {
-    if (!parts.length) {
+  const pushUserInput = (content: GeminiContentBlock[]) => {
+    if (!content.length) {
       return;
     }
-    const previous = contents.at(-1);
-    if (previous?.role === role) {
-      previous.parts.push(...parts);
-      return;
-    }
-    contents.push({ role, parts });
+    input.push({ type: "user_input", content });
   };
 
   for (const message of messages) {
@@ -109,41 +133,47 @@ export function toGeminiWireContents(messages: ChatMessage[]): {
 
     if (message.role === "tool") {
       const toolName = toolNamesByCallId.get(message.toolCallId ?? "") ?? "unknown_tool";
-      pushParts("user", [{ functionResponse: { name: toolName, response: { result: message.content } } }]);
+      input.push({
+        type: "function_result",
+        call_id: message.toolCallId,
+        name: toolName,
+        result: [{ type: "text", text: message.content }],
+      });
       continue;
     }
 
     if (message.role === "assistant") {
-      const parts: GeminiPart[] = [];
       if (message.content) {
-        parts.push({ text: message.content });
+        input.push({ type: "model_output", content: [{ type: "text", text: message.content }] });
       }
       for (const toolCall of message.toolCalls ?? []) {
+        if (!toolResultCallIds.has(toolCall.id)) {
+          continue;
+        }
         let args: unknown = {};
         try {
           args = toolCall.arguments ? JSON.parse(toolCall.arguments) : {};
         } catch {
           args = {};
         }
-        parts.push({ functionCall: { name: toolCall.toolName, args } });
+        input.push({ type: "function_call", id: toolCall.id, name: toolCall.toolName, arguments: args });
       }
-      pushParts("model", parts);
       continue;
     }
 
-    const parts: GeminiPart[] = [];
+    const content: GeminiContentBlock[] = [];
     for (const attachment of message.attachments ?? []) {
-      parts.push(...attachmentToParts(attachment));
+      content.push(...attachmentToContentBlocks(attachment));
     }
     if (message.content) {
-      parts.push({ text: message.content });
+      content.push({ type: "text", text: message.content });
     }
-    pushParts("user", parts);
+    pushUserInput(content);
   }
 
   return {
-    systemInstruction: systemParts.length ? { parts: [{ text: systemParts.join("\n\n") }] } : undefined,
-    contents,
+    systemInstruction: systemParts.length ? systemParts.join("\n\n") : undefined,
+    input,
   };
 }
 
@@ -165,18 +195,33 @@ function sanitizeSchema(schema: unknown): unknown {
   return schema;
 }
 
-export function toGeminiTools(tools: ProviderToolSchema[]): Array<{
-  functionDeclarations: Array<{ name: string; description?: string; parameters?: unknown }>;
-}> {
-  return [
-    {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.function.name,
-        description: tool.function.description,
-        parameters: tool.function.parameters ? sanitizeSchema(tool.function.parameters) : undefined,
-      })),
-    },
-  ];
+export function toGeminiTools(
+  tools: ProviderToolSchema[],
+): Array<{ type: "function"; name: string; description?: string; parameters?: unknown }> {
+  return tools.map((tool) => ({
+    type: "function",
+    name: tool.function.name,
+    description: tool.function.description,
+    parameters: tool.function.parameters ? sanitizeSchema(tool.function.parameters) : undefined,
+  }));
+}
+
+function normalizeStreamedArguments(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(value ?? {});
+}
+
+function stepToFunctionCall(step: GeminiStreamStep): { id?: string; name: string; arguments: string } | null {
+  if (step.type !== "function_call" || !step.name) {
+    return null;
+  }
+  return {
+    id: step.id,
+    name: step.name,
+    arguments: normalizeStreamedArguments(step.arguments ?? {}),
+  };
 }
 
 function createProviderModel(config: GeminiProviderConfig): ProviderModel {
@@ -226,23 +271,23 @@ export function createGeminiProvider(config: GeminiProviderConfig): ChatProvider
         });
     },
     async complete(input: ProviderCompleteInput): Promise<ProviderResponse> {
-      const wire = toGeminiWireContents(input.messages);
-      const response = await fetcher(
-        `${baseUrl}/models/${encodeURIComponent(config.model)}:streamGenerateContent?alt=sse`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": config.apiKey,
-          },
-          body: JSON.stringify({
-            ...(wire.systemInstruction ? { systemInstruction: wire.systemInstruction } : {}),
-            contents: wire.contents,
-            ...(input.tools?.length ? { tools: toGeminiTools(input.tools) } : {}),
-          }),
-          signal: input.signal,
+      const wire = toGeminiInteractionInput(input.messages);
+      const response = await fetcher(`${baseUrl}/interactions?alt=sse`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": config.apiKey,
         },
-      );
+        body: JSON.stringify({
+          model: config.model,
+          input: wire.input,
+          store: false,
+          stream: true,
+          ...(wire.systemInstruction ? { system_instruction: wire.systemInstruction } : {}),
+          ...(input.tools?.length ? { tools: toGeminiTools(input.tools) } : {}),
+        }),
+        signal: input.signal,
+      });
 
       if (!response.ok) {
         throw new Error(`Gemini provider request failed with ${response.status}: ${await response.text()}`);
@@ -254,7 +299,8 @@ export function createGeminiProvider(config: GeminiProviderConfig): ChatProvider
       }
 
       const decoder = new TextDecoder();
-      const functionCalls: Array<{ name: string; args: unknown }> = [];
+      const functionCalls: Array<{ id?: string; name: string; arguments: unknown }> = [];
+      const streamingFunctionCalls = new Map<number, { id?: string; name?: string; arguments: string }>();
       let content = "";
       let buffer = "";
 
@@ -286,22 +332,75 @@ export function createGeminiProvider(config: GeminiProviderConfig): ChatProvider
             continue;
           }
 
+          if (chunk.event_type === "step.start" && typeof chunk.index === "number" && chunk.step?.type === "function_call") {
+            streamingFunctionCalls.set(chunk.index, {
+              id: chunk.step.id,
+              name: chunk.step.name,
+              arguments: normalizeStreamedArguments(chunk.step.arguments ?? ""),
+            });
+          }
+
+          if (chunk.delta?.type === "text" && chunk.delta.text) {
+            content += chunk.delta.text;
+            input.onDelta?.(chunk.delta.text);
+          }
+          if (chunk.delta?.type === "arguments" && typeof chunk.index === "number") {
+            const current = streamingFunctionCalls.get(chunk.index);
+            if (current) {
+              current.arguments += chunk.delta.partial_arguments ?? "";
+            }
+          }
+          if (chunk.delta?.type === "function_call" && chunk.delta.name) {
+            functionCalls.push({
+              id: chunk.delta.id,
+              name: chunk.delta.name,
+              arguments: chunk.delta.arguments ?? {},
+            });
+          }
+
           for (const part of chunk.candidates?.[0]?.content?.parts ?? []) {
             if (part.text) {
               content += part.text;
               input.onDelta?.(part.text);
             }
             if (part.functionCall?.name) {
-              functionCalls.push({ name: part.functionCall.name, args: part.functionCall.args ?? {} });
+              functionCalls.push({ name: part.functionCall.name, arguments: part.functionCall.args ?? {} });
+            }
+          }
+
+          if (
+            (chunk.event_type === "interaction.completed" || chunk.event_type === "interaction.complete") &&
+            !streamingFunctionCalls.size &&
+            !functionCalls.length
+          ) {
+            for (const step of chunk.interaction?.steps ?? chunk.interaction?.outputs ?? []) {
+              const call = stepToFunctionCall(step);
+              if (call) {
+                functionCalls.push(call);
+              }
+              if (step.type === "model_output" && !content) {
+                for (const part of step.content ?? []) {
+                  if (part.type === "text" && part.text) {
+                    content += part.text;
+                    input.onDelta?.(part.text);
+                  }
+                }
+              }
             }
           }
         }
       }
 
+      for (const call of streamingFunctionCalls.values()) {
+        if (call.name) {
+          functionCalls.push({ id: call.id, name: call.name, arguments: call.arguments || "{}" });
+        }
+      }
+
       const toolCalls: ToolCallEvent[] = functionCalls.map((functionCall) => {
-        const rawArguments = JSON.stringify(functionCall.args ?? {});
+        const rawArguments = normalizeStreamedArguments(functionCall.arguments);
         return {
-          id: crypto.randomUUID(),
+          id: functionCall.id ?? crypto.randomUUID(),
           serverName: "Gemini",
           toolName: functionCall.name,
           status: "queued",

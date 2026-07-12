@@ -26,6 +26,7 @@ export interface ProviderConfig {
 export interface ProviderConfigDriver {
   loadProviderConfigs: () => Promise<ProviderConfig[]>;
   saveProviderConfig: (config: ProviderConfig) => Promise<void>;
+  removeProviderConfig: (providerId: string) => Promise<void>;
   saveProviderApiKey: (providerId: string, apiKey: string) => Promise<void>;
   getProviderApiKey: (providerId: string) => Promise<string | null>;
 }
@@ -33,6 +34,7 @@ export interface ProviderConfigDriver {
 export interface ProviderConfigRepository {
   loadProviderConfigs: () => Promise<ProviderConfig[]>;
   saveProviderConfig: (config: ProviderConfig) => Promise<void>;
+  removeProviderConfig: (providerId: string) => Promise<void>;
   saveProviderApiKey: (providerId: string, apiKey: string) => Promise<void>;
   getProviderApiKey: (providerId: string) => Promise<string | null>;
 }
@@ -107,6 +109,7 @@ export function createProviderConfigRepository(driver: ProviderConfigDriver): Pr
         await driver.saveProviderApiKey(config.id, config.apiKey);
       }
     },
+    removeProviderConfig: (providerId) => driver.removeProviderConfig(providerId),
     saveProviderApiKey: (providerId, apiKey) => driver.saveProviderApiKey(providerId, apiKey),
     getProviderApiKey: (providerId) => driver.getProviderApiKey(providerId),
   };
@@ -122,6 +125,10 @@ export function createMemoryProviderConfigDriver(store: BrowserProviderConfigSto
         sanitizeProviderConfig(config),
         ...store.configs.filter((currentConfig) => currentConfig.id !== config.id),
       ];
+    },
+    async removeProviderConfig(providerId) {
+      store.configs = store.configs.filter((currentConfig) => currentConfig.id !== providerId);
+      store.keys.delete(providerId);
     },
     async saveProviderApiKey(providerId, apiKey) {
       store.keys.set(providerId, apiKey);
@@ -147,6 +154,11 @@ export function createLocalStorageProviderConfigDriver(storage: Storage): Provid
       ];
       writeBrowserProviderConfigStore(storage, store);
     },
+    async removeProviderConfig(providerId) {
+      store.configs = store.configs.filter((currentConfig) => currentConfig.id !== providerId);
+      store.keys.delete(providerId);
+      writeBrowserProviderConfigStore(storage, store);
+    },
     async saveProviderApiKey(providerId, apiKey) {
       store.keys.set(providerId, apiKey);
       writeBrowserProviderConfigStore(storage, store);
@@ -162,6 +174,7 @@ export function createTauriProviderConfigDriver(): ProviderConfigDriver {
   return {
     loadProviderConfigs: () => invoke<ProviderConfig[]>("load_provider_configs"),
     saveProviderConfig: (config) => invoke<void>("save_provider_config", { config: sanitizeProviderConfig(config) }),
+    removeProviderConfig: (providerId) => invoke<void>("remove_provider_config", { providerId }),
     saveProviderApiKey: (providerId, apiKey) => invoke<void>("save_provider_api_key", { providerId, apiKey }),
     getProviderApiKey: (providerId) => invoke<string | null>("get_provider_api_key", { providerId }),
   };

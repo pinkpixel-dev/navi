@@ -64,6 +64,13 @@ fn load_provider_configs(app: AppHandle) -> Result<Vec<serde_json::Value>, Strin
 }
 
 #[tauri::command]
+fn remove_provider_config(app: AppHandle, provider_id: String) -> Result<(), String> {
+    storage_for_app(&app)?
+        .delete_provider_config(&provider_id)
+        .map_err(|error| format!("Could not remove provider config: {error}"))
+}
+
+#[tauri::command]
 fn save_provider_api_key(provider_id: String, api_key: String) -> Result<(), String> {
     credentials::save_provider_api_key(&provider_id, &api_key)
 }
@@ -123,13 +130,13 @@ fn remove_local_model(app: AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn is_local_runtime_downloaded(app: AppHandle, binary_override: Option<String>) -> bool {
-    llama_runtime::is_downloaded(&app, binary_override.as_deref())
+fn is_local_runtime_downloaded(app: AppHandle, binary_override: Option<String>, acceleration: Option<String>) -> bool {
+    llama_runtime::is_downloaded(&app, binary_override.as_deref(), acceleration.as_deref())
 }
 
 #[tauri::command]
-fn download_local_runtime(app: AppHandle) -> Result<(), String> {
-    llama_runtime::download_and_extract(&app)
+fn download_local_runtime(app: AppHandle, acceleration: Option<String>) -> Result<(), String> {
+    llama_runtime::download_and_extract(&app, acceleration.as_deref())
 }
 
 #[tauri::command]
@@ -138,8 +145,10 @@ fn start_local_runtime(
     model_id: String,
     model_path: String,
     binary_override: Option<String>,
+    acceleration: Option<String>,
+    gpu_layers: Option<u32>,
 ) -> Result<serde_json::Value, String> {
-    llama_runtime::start(&app, model_id, model_path, binary_override)
+    llama_runtime::start(&app, model_id, model_path, binary_override, acceleration.as_deref(), gpu_layers)
 }
 
 #[tauri::command]
@@ -234,6 +243,7 @@ pub fn run() {
             update_conversation_metadata,
             save_provider_config,
             load_provider_configs,
+            remove_provider_config,
             save_provider_api_key,
             get_provider_api_key,
             import_local_model,

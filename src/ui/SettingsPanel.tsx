@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
-import { FolderOpen, KeyRound, Play, Plug, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
+import { FolderOpen, KeyRound, Pencil, Play, Plug, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
 import { builtinTools, defaultEnabledBuiltinToolNames } from "../core/tools/builtinTools";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createProviderFromConfig } from "../core/providers/createProvider";
@@ -9,7 +9,11 @@ import {
   type ProviderType,
 } from "../core/providers/providerConfig";
 import { createDefaultLocalModelRepository, type LocalModel } from "../core/local-models/localModel";
-import { createDefaultLlamaRuntimeDriver, type LocalRuntimeStatus } from "../core/local-models/llamaRuntime";
+import {
+  createDefaultLlamaRuntimeDriver,
+  type LocalRuntimeAcceleration,
+  type LocalRuntimeStatus,
+} from "../core/local-models/llamaRuntime";
 import {
   createDefaultMcpServerDriver,
   type McpServerConfig,
@@ -106,6 +110,32 @@ function createDraftProvider(): ProviderConfig {
   };
 }
 
+function defaultProviderNameForType(type: ProviderType): string {
+  switch (type) {
+    case "openai":
+      return "OpenAI";
+    case "anthropic":
+      return "Anthropic";
+    case "gemini":
+      return "Google Gemini";
+    case "openrouter":
+      return "OpenRouter";
+    case "ollama":
+      return "Ollama";
+    case "lmstudio":
+      return "LM Studio";
+    default:
+      return "Compatible endpoint";
+  }
+}
+
+function isDefaultProviderName(name: string): boolean {
+  const normalized = name.trim().toLowerCase();
+  return ["compatible endpoint", "openai", "anthropic", "google gemini", "openrouter", "ollama", "lm studio"].includes(
+    normalized,
+  );
+}
+
 const providerTypesWithRequiredKey = new Set<ProviderType>(["openai", "anthropic", "gemini", "openrouter"]);
 const providerTypesWithBaseUrl = new Set<ProviderType>(["openai-compatible", "ollama", "lmstudio"]);
 
@@ -155,6 +185,7 @@ export function SettingsPanel({
   onClose,
 }: SettingsPanelProps) {
   const [draftProvider, setDraftProvider] = useState<ProviderConfig>(providerConfigs[0] ?? createDraftProvider());
+  const [isProviderModalOpen, setIsProviderModalOpen] = useState(false);
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState("Provider config is local to this app.");
   const [modelFilterText, setModelFilterText] = useState("");
@@ -162,6 +193,7 @@ export function SettingsPanel({
   const [runtimeStatus, setRuntimeStatus] = useState<LocalRuntimeStatus>(idleRuntimeStatus);
   const [isRuntimeBusy, setIsRuntimeBusy] = useState(false);
   const [draftMcpServer, setDraftMcpServer] = useState<McpServerConfig>(createDraftMcpServer());
+  const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
   const [mcpArgsText, setMcpArgsText] = useState("");
   const [mcpEnvText, setMcpEnvText] = useState("");
   const [mcpHeadersText, setMcpHeadersText] = useState("");
@@ -271,6 +303,17 @@ export function SettingsPanel({
     }
   };
 
+  const handleProviderTypeChange = (nextType: ProviderType) => {
+    const nextBaseUrl = providerTypesWithBaseUrl.has(nextType)
+      ? draftProvider.baseUrl || defaultBaseUrlForType(nextType)
+      : undefined;
+    const nextName =
+      !draftProvider.name.trim() || isDefaultProviderName(draftProvider.name)
+        ? defaultProviderNameForType(nextType)
+        : draftProvider.name;
+    updateDraft({ type: nextType, baseUrl: nextBaseUrl, name: nextName });
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
 
@@ -288,6 +331,7 @@ export function SettingsPanel({
     onProviderConfigsChange(nextConfigs);
     setApiKey("");
     setStatus("Provider saved.");
+    setIsProviderModalOpen(false);
   };
 
   const handleSelectProvider = (providerId: string) => {
@@ -295,6 +339,7 @@ export function SettingsPanel({
       setDraftProvider(createDraftProvider());
       setApiKey("");
       setStatus("New provider draft.");
+      setIsProviderModalOpen(true);
       return;
     }
 
@@ -304,6 +349,19 @@ export function SettingsPanel({
       setApiKey("");
       setStatus(nextProvider.hasApiKey ? "Saved key available." : "No key saved for this provider.");
     }
+  };
+
+  const handleRemoveProvider = async (provider: ProviderConfig) => {
+    const confirmed = await confirmDestructiveAction(`Delete provider "${provider.name}"? This removes it from Navi.`);
+    if (!confirmed) {
+      return;
+    }
+    await providerConfigRepository.removeProviderConfig(provider.id);
+    onProviderConfigsChange(providerConfigs.filter((config) => config.id !== provider.id));
+    if (draftProvider.id === provider.id) {
+      setDraftProvider(providerConfigs.find((config) => config.id !== provider.id) ?? createDraftProvider());
+    }
+    setStatus("Provider removed.");
   };
 
   const handleImportLocalModel = async () => {
@@ -339,18 +397,28 @@ export function SettingsPanel({
   const handleStartLocalModel = async (model: LocalModel) => {
     setIsRuntimeBusy(true);
     try {
-      const alreadyDownloaded = await llamaRuntimeDriver.isRuntimeDownloaded(appSettings.customLlamaServerPath);
+      const acceleration = appSettings.localRuntimeAcceleration ?? "auto";
+      const gpuLayers = appSettings.localRuntimeGpuLayers ?? 99;
+      const alreadyDownloaded = await llamaRuntimeDriver.isRuntimeDownloaded(appSettings.customLlamaServerPath, acceleration);
       if (!alreadyDownloaded) {
-        const confirmed = await confirmDestructiveAction("Download the llama.cpp runtime (~80MB)? This only happens once.");
+        const confirmed = await confirmDestructiveAction(
+          `Download the llama.cpp ${acceleration === "auto" ? "accelerated" : acceleration.toUpperCase()} runtime? This only happens once.`,
+        );
         if (!confirmed) {
           return;
         }
         setLocalModelStatus("Downloading llama.cpp runtime...");
-        await llamaRuntimeDriver.downloadRuntime();
+        await llamaRuntimeDriver.downloadRuntime(acceleration);
       }
 
       setLocalModelStatus(`Starting ${model.fileName} — this can take a while for large models...`);
-      const nextStatus = await llamaRuntimeDriver.startRuntime(model.id, model.filePath, appSettings.customLlamaServerPath);
+      const nextStatus = await llamaRuntimeDriver.startRuntime(
+        model.id,
+        model.filePath,
+        appSettings.customLlamaServerPath,
+        acceleration,
+        gpuLayers,
+      );
       setRuntimeStatus(nextStatus);
       setLocalModelStatus(
         nextStatus.state === "ready"
@@ -397,6 +465,7 @@ export function SettingsPanel({
     onMcpServersChange([config, ...mcpServers.filter((server) => server.id !== config.id)]);
     setDraftMcpServer(config);
     setMcpStatus("Server saved.");
+    setIsMcpModalOpen(false);
   };
 
   const handleSelectMcpServer = (id: string) => {
@@ -407,6 +476,7 @@ export function SettingsPanel({
       setMcpHeadersText("");
       setMcpTestResult(null);
       setMcpStatus("New server draft.");
+      setIsMcpModalOpen(true);
       return;
     }
 
@@ -418,6 +488,7 @@ export function SettingsPanel({
       setMcpHeadersText(formatKeyValueLines(server.headers, ": "));
       setMcpTestResult(null);
       setMcpStatus(mcpConnections[id] ? "Connected." : "Not connected.");
+      setIsMcpModalOpen(true);
     }
   };
 
@@ -464,95 +535,83 @@ export function SettingsPanel({
         </header>
 
         <div className="settings-grid">
-          <div className="settings-form">
-            <h3>General</h3>
-            <label>
-              <span>Send message with</span>
-              <select
-                value={appSettings.submitShortcut}
-                onChange={(event) =>
-                  onAppSettingsChange({
-                    ...appSettings,
-                    submitShortcut: event.target.value as SubmitShortcut,
-                  })
-                }
-              >
-                <option value="enter">Enter (Shift+Enter for a new line)</option>
-                <option value="shift-enter">Shift+Enter (Enter for a new line)</option>
-              </select>
-            </label>
-          </div>
-          <div className="settings-form">
-            <h3>Built-in Tools</h3>
-            <p className="settings-note">
-              These run inside Navi without an MCP server. Toggle which ones the model can call.
-            </p>
-            <div className="settings-model-list">
-              {builtinTools.map((tool) => (
-                <label className="settings-model-checkbox" key={tool.name}>
-                  <input
-                    type="checkbox"
-                    checked={enabledToolNames.includes(tool.name)}
-                    onChange={() => handleToggleBuiltinTool(tool.name)}
-                  />
-                  <span>
-                    <strong>{tool.name}</strong> — {tool.description}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="settings-form">
-            <h3>Avatars</h3>
-            <p className="settings-note">Shown next to messages. PNG, JPEG, GIF, or WebP.</p>
-            <div className="settings-avatar-row">
-              <img className="settings-avatar" src={appSettings.userAvatar ?? "/user.png"} alt="User avatar" />
-              <span>You</span>
-              <input
-                ref={userAvatarInputRef}
-                type="file"
-                hidden
-                accept="image/png,image/jpeg,image/gif,image/webp"
-                onChange={handleAvatarUpload("user")}
-              />
-              <button type="button" onClick={() => userAvatarInputRef.current?.click()}>
-                Change
+          <div className="settings-section">
+            <div className="settings-section-header">
+              <h3>Connected Providers</h3>
+              <button type="button" onClick={() => handleSelectProvider("new")}>
+                <Plus size={15} />
+                Add New Provider
               </button>
-              {appSettings.userAvatar ? (
-                <button type="button" onClick={() => onAppSettingsChange({ ...appSettings, userAvatar: undefined })}>
-                  Reset
-                </button>
-              ) : null}
             </div>
-            <div className="settings-avatar-row">
-              <img
-                className="settings-avatar"
-                src={appSettings.assistantAvatar ?? "/assistant.png"}
-                alt="Assistant avatar"
-              />
-              <span>Assistant</span>
-              <input
-                ref={assistantAvatarInputRef}
-                type="file"
-                hidden
-                accept="image/png,image/jpeg,image/gif,image/webp"
-                onChange={handleAvatarUpload("assistant")}
-              />
-              <button type="button" onClick={() => assistantAvatarInputRef.current?.click()}>
-                Change
-              </button>
-              {appSettings.assistantAvatar ? (
-                <button
-                  type="button"
-                  onClick={() => onAppSettingsChange({ ...appSettings, assistantAvatar: undefined })}
-                >
-                  Reset
-                </button>
-              ) : null}
+            <div className="settings-card-list">
+              {providerConfigs.length ? (
+                providerConfigs.map((provider) => (
+                  <div
+                    className={
+                      provider.id === draftProvider.id
+                        ? "settings-card settings-clickable-card active"
+                        : "settings-card settings-clickable-card"
+                    }
+                    key={provider.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => handleSelectProvider(provider.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        handleSelectProvider(provider.id);
+                      }
+                    }}
+                  >
+                    <strong>{provider.name}</strong>
+                    <span>
+                      {provider.hasApiKey ? "saved key" : "key optional"} / {providerEndpointLabel(provider)}
+                    </span>
+                    <div className="settings-card-actions">
+                      <button
+                        type="button"
+                        aria-label={`Edit ${provider.name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleSelectProvider(provider.id);
+                          setIsProviderModalOpen(true);
+                        }}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete ${provider.name}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleRemoveProvider(provider);
+                        }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="settings-card">
+                  <strong>No providers saved</strong>
+                  <span>Add a provider to start chatting.</span>
+                </div>
+              )}
             </div>
           </div>
-          <form className="settings-form" onSubmit={handleSubmit}>
-            <h3>Provider Setup</h3>
+          {isProviderModalOpen ? (
+            <div className="settings-modal-scrim" role="dialog" aria-modal="true" aria-label="Provider setup">
+              <form className="settings-form settings-modal" onSubmit={handleSubmit}>
+                <header>
+                  <div>
+                    <h3>Provider Setup</h3>
+                    <p>Add keys, fetch models, and choose which models appear in chat.</p>
+                  </div>
+                  <button type="button" aria-label="Close provider setup" onClick={() => setIsProviderModalOpen(false)}>
+                    <X size={16} />
+                  </button>
+                </header>
             <label>
               <span>Editing</span>
               <select value={providerConfigs.some((config) => config.id === draftProvider.id) ? draftProvider.id : "new"} onChange={(event) => handleSelectProvider(event.target.value)}>
@@ -565,22 +624,11 @@ export function SettingsPanel({
               </select>
             </label>
             <label>
-              <span>Name</span>
-              <input
-                value={draftProvider.name}
-                onChange={(event) => updateDraft({ name: event.target.value })}
-              />
-            </label>
-            <label>
               <span>Type</span>
               <select
                 value={draftProvider.type}
                 onChange={(event) => {
-                  const nextType = event.target.value as ProviderType;
-                  const nextBaseUrl = providerTypesWithBaseUrl.has(nextType)
-                    ? draftProvider.baseUrl || defaultBaseUrlForType(nextType)
-                    : undefined;
-                  updateDraft({ type: nextType, baseUrl: nextBaseUrl });
+                  handleProviderTypeChange(event.target.value as ProviderType);
                 }}
               >
                 <option value="openai-compatible">OpenAI-compatible</option>
@@ -591,6 +639,13 @@ export function SettingsPanel({
                 <option value="ollama">Ollama</option>
                 <option value="lmstudio">LM Studio</option>
               </select>
+            </label>
+            <label>
+              <span>Name</span>
+              <input
+                value={draftProvider.name}
+                onChange={(event) => updateDraft({ name: event.target.value })}
+              />
             </label>
             {providerTypesWithBaseUrl.has(draftProvider.type) ? (
               <label>
@@ -675,9 +730,78 @@ export function SettingsPanel({
                 </div>
               </>
             ) : null}
-          </form>
+              </form>
+            </div>
+          ) : null}
+          <div className="settings-form settings-general">
+            <h3>General</h3>
+            <label>
+              <span>Send message with</span>
+              <select
+                value={appSettings.submitShortcut}
+                onChange={(event) =>
+                  onAppSettingsChange({
+                    ...appSettings,
+                    submitShortcut: event.target.value as SubmitShortcut,
+                  })
+                }
+              >
+                <option value="enter">Enter (Shift+Enter for a new line)</option>
+                <option value="shift-enter">Shift+Enter (Enter for a new line)</option>
+              </select>
+            </label>
+          </div>
+          <div className="settings-form settings-avatars">
+            <h3>Avatars</h3>
+            <p className="settings-note">Shown next to messages. PNG, JPEG, GIF, or WebP.</p>
+            <div className="settings-avatar-row">
+              <img className="settings-avatar" src={appSettings.userAvatar ?? "/user.png"} alt="User avatar" />
+              <span>You</span>
+              <input
+                ref={userAvatarInputRef}
+                type="file"
+                hidden
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                onChange={handleAvatarUpload("user")}
+              />
+              <button type="button" onClick={() => userAvatarInputRef.current?.click()}>
+                Change
+              </button>
+              {appSettings.userAvatar ? (
+                <button type="button" onClick={() => onAppSettingsChange({ ...appSettings, userAvatar: undefined })}>
+                  Reset
+                </button>
+              ) : null}
+            </div>
+            <div className="settings-avatar-row">
+              <img
+                className="settings-avatar"
+                src={appSettings.assistantAvatar ?? "/assistant.png"}
+                alt="Assistant avatar"
+              />
+              <span>Assistant</span>
+              <input
+                ref={assistantAvatarInputRef}
+                type="file"
+                hidden
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                onChange={handleAvatarUpload("assistant")}
+              />
+              <button type="button" onClick={() => assistantAvatarInputRef.current?.click()}>
+                Change
+              </button>
+              {appSettings.assistantAvatar ? (
+                <button
+                  type="button"
+                  onClick={() => onAppSettingsChange({ ...appSettings, assistantAvatar: undefined })}
+                >
+                  Reset
+                </button>
+              ) : null}
+            </div>
+          </div>
           {isTauri ? (
-            <div>
+            <div className="settings-form settings-local-models">
               <h3>Local Models</h3>
               <p className="settings-note">
                 Local models stay selectable in chat alongside any providers you configure below — you never need to
@@ -699,6 +823,43 @@ export function SettingsPanel({
                   placeholder="Skips the download if you already have llama-server installed"
                 />
               </label>
+              <label>
+                <span>llama.cpp acceleration</span>
+                <select
+                  value={appSettings.localRuntimeAcceleration ?? "auto"}
+                  onChange={(event) =>
+                    onAppSettingsChange({
+                      ...appSettings,
+                      localRuntimeAcceleration: event.target.value as LocalRuntimeAcceleration,
+                    })
+                  }
+                >
+                  <option value="auto">Auto (CUDA on Windows, Vulkan on Linux)</option>
+                  <option value="cuda">CUDA / NVIDIA</option>
+                  <option value="vulkan">Vulkan</option>
+                  <option value="rocm">ROCm / AMD</option>
+                  <option value="sycl">SYCL / Intel</option>
+                  <option value="cpu">CPU only</option>
+                </select>
+              </label>
+              <label>
+                <span>GPU layers</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={999}
+                  value={appSettings.localRuntimeGpuLayers ?? 99}
+                  onChange={(event) =>
+                    onAppSettingsChange({
+                      ...appSettings,
+                      localRuntimeGpuLayers: Number(event.target.value || 0),
+                    })
+                  }
+                />
+              </label>
+              <p className="settings-note">
+                Linux Auto uses the Vulkan build from llama.cpp releases. Use a custom CUDA binary path for Linux CUDA.
+              </p>
               <p className="settings-note">
                 <KeyRound size={14} />
                 {localModelStatus}
@@ -748,8 +909,72 @@ export function SettingsPanel({
             </div>
           ) : null}
           {isTauri ? (
-            <form className="settings-form" onSubmit={handleSaveMcpServer}>
-              <h3>MCP Servers</h3>
+            <div className="settings-section settings-mcp-servers">
+              <div className="settings-section-header">
+                <h3>Connected MCP Servers</h3>
+                <button type="button" onClick={() => handleSelectMcpServer("new")}>
+                  <Plus size={15} />
+                  Add MCP Server
+                </button>
+              </div>
+              <div className="settings-card-list">
+                {mcpServers.length ? (
+                  mcpServers.map((server) => {
+                    const connection = mcpConnections[server.id];
+                    const isConnected = connection?.state === "connected";
+                    return (
+                      <div className="settings-card" key={server.id}>
+                        <strong>{server.name}</strong>
+                        <span>
+                          {server.transport === "stdio" ? server.command : server.url}
+                          {isConnected ? ` / ${connection.tools.length} tool${connection.tools.length === 1 ? "" : "s"}` : " / not connected"}
+                        </span>
+                        <div className="settings-card-actions">
+                          {isConnected ? (
+                            <button type="button" aria-label={`Disconnect ${server.name}`} onClick={() => handleDisconnectMcpServer(server)}>
+                              <Square size={14} />
+                            </button>
+                          ) : (
+                            <button type="button" aria-label={`Connect ${server.name}`} onClick={() => handleConnectMcpServer(server)}>
+                              <Plug size={14} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            aria-label={`Edit ${server.name}`}
+                            onClick={() => handleSelectMcpServer(server.id)}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button type="button" aria-label={`Remove ${server.name}`} onClick={() => handleRemoveMcpServer(server.id)}>
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="settings-card">
+                    <strong>No MCP servers saved</strong>
+                    <span>Add a stdio or Streamable HTTP server to give the model real tools.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+          {isTauri ? (
+            isMcpModalOpen ? (
+              <div className="settings-modal-scrim" role="dialog" aria-modal="true" aria-label="MCP server setup">
+                <form className="settings-form settings-modal" onSubmit={handleSaveMcpServer}>
+                  <header>
+                    <div>
+                      <h3>MCP Server</h3>
+                      <p>Add or edit command, environment, headers, and connection settings.</p>
+                    </div>
+                    <button type="button" aria-label="Close MCP server setup" onClick={() => setIsMcpModalOpen(false)}>
+                      <X size={16} />
+                    </button>
+                  </header>
               <label>
                 <span>Editing</span>
                 <select
@@ -861,62 +1086,29 @@ export function SettingsPanel({
                   <span>{mcpTestResult.tools.map((tool) => tool.name).join(", ") || "No tools reported."}</span>
                 </div>
               ) : null}
-              {mcpServers.length ? (
-                mcpServers.map((server) => {
-                  const connection = mcpConnections[server.id];
-                  const isConnected = connection?.state === "connected";
-                  return (
-                    <div className="settings-row" key={server.id}>
-                      <strong>{server.name}</strong>
-                      <span>
-                        {server.transport === "stdio" ? server.command : server.url}
-                        {isConnected ? ` · ${connection.tools.length} tool${connection.tools.length === 1 ? "" : "s"}` : " · not connected"}
-                      </span>
-                      {isConnected ? (
-                        <button type="button" aria-label={`Disconnect ${server.name}`} onClick={() => handleDisconnectMcpServer(server)}>
-                          <Square size={14} />
-                        </button>
-                      ) : (
-                        <button type="button" aria-label={`Connect ${server.name}`} onClick={() => handleConnectMcpServer(server)}>
-                          <Plug size={14} />
-                        </button>
-                      )}
-                      <button type="button" aria-label={`Remove ${server.name}`} onClick={() => handleRemoveMcpServer(server.id)}>
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="settings-row">
-                  <strong>No MCP servers saved</strong>
-                  <span>Add a stdio or Streamable HTTP server to give the model real tools.</span>
-                </div>
-              )}
-            </form>
-          ) : null}
-          <div>
-            <h3>Providers</h3>
-            {providerConfigs.length ? (
-              providerConfigs.map((provider) => (
-                <button
-                  className={provider.id === draftProvider.id ? "settings-row settings-row-button active" : "settings-row settings-row-button"}
-                  key={provider.id}
-                  type="button"
-                  onClick={() => handleSelectProvider(provider.id)}
-                >
-                  <strong>{provider.name}</strong>
-                  <span>
-                    {provider.hasApiKey ? "saved key" : "key optional"} / {providerEndpointLabel(provider)}
-                  </span>
-                </button>
-              ))
-            ) : (
-              <div className="settings-row">
-                <strong>No providers saved</strong>
-                <span>Add an OpenAI-compatible endpoint to start chatting.</span>
+                </form>
               </div>
-            )}
+            ) : null
+          ) : null}
+          <div className="settings-form">
+            <h3>Built-in Tools</h3>
+            <p className="settings-note">
+              These run inside Navi without an MCP server. Toggle which ones the model can call.
+            </p>
+            <div className="settings-model-list">
+              {builtinTools.map((tool) => (
+                <label className="settings-model-checkbox" key={tool.name}>
+                  <input
+                    type="checkbox"
+                    checked={enabledToolNames.includes(tool.name)}
+                    onChange={() => handleToggleBuiltinTool(tool.name)}
+                  />
+                  <span>
+                    <strong>{tool.name}</strong> — {tool.description}
+                  </span>
+                </label>
+              ))}
+            </div>
           </div>
         </div>
       </section>

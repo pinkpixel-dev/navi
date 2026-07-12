@@ -15,6 +15,46 @@ const HEALTH_POLL_INTERVAL_MS: u64 = 500;
 const HEALTH_POLL_TIMEOUT_SECS: u64 = 120;
 const MAX_LOG_LINES: usize = 200;
 const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
+const DEFAULT_GPU_LAYERS: u32 = 99;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeAcceleration {
+    Auto,
+    Cpu,
+    Cuda,
+    Vulkan,
+    Rocm,
+    Sycl,
+}
+
+impl RuntimeAcceleration {
+    fn from_option(value: Option<&str>) -> Result<Self, String> {
+        match value.unwrap_or("auto") {
+            "auto" => Ok(Self::Auto),
+            "cpu" => Ok(Self::Cpu),
+            "cuda" => Ok(Self::Cuda),
+            "vulkan" => Ok(Self::Vulkan),
+            "rocm" => Ok(Self::Rocm),
+            "sycl" => Ok(Self::Sycl),
+            other => Err(format!("Unknown llama.cpp acceleration mode: {other}")),
+        }
+    }
+
+    fn directory_name(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Cpu => "cpu",
+            Self::Cuda => "cuda",
+            Self::Vulkan => "vulkan",
+            Self::Rocm => "rocm",
+            Self::Sycl => "sycl",
+        }
+    }
+
+    fn uses_gpu_layers(self) -> bool {
+        !matches!(self, Self::Cpu)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 enum RuntimeStatusState {
@@ -87,22 +127,51 @@ pub fn status(app: &AppHandle) -> Value {
     status_json(&inner)
 }
 
-fn pattern_for(os: &str, arch: &str) -> Result<&'static str, String> {
-    match (os, arch) {
-        ("linux", "x86_64") => Ok("ubuntu-x64"),
-        ("macos", "aarch64") => Ok("macos-arm64"),
-        ("macos", "x86_64") => Ok("macos-x64"),
-        ("windows", "x86_64") => Ok("win-cpu-x64"),
-        (os, arch) => Err(format!("No known llama.cpp CPU build for {os}/{arch}")),
+fn patterns_for(
+    os: &str,
+    arch: &str,
+    acceleration: RuntimeAcceleration,
+) -> Result<Vec<&'static str>, String> {
+    match (os, arch, acceleration) {
+        ("linux", "x86_64", RuntimeAcceleration::Auto) => Ok(vec!["ubuntu-vulkan-x64"]),
+        ("linux", "x86_64", RuntimeAcceleration::Cpu) => Ok(vec!["ubuntu-x64"]),
+        ("linux", "x86_64", RuntimeAcceleration::Cuda) => Ok(vec!["ubuntu-cuda-x64"]),
+        ("linux", "x86_64", RuntimeAcceleration::Vulkan) => Ok(vec!["ubuntu-vulkan-x64"]),
+        ("linux", "x86_64", RuntimeAcceleration::Rocm) => Ok(vec!["ubuntu-rocm"]),
+        ("linux", "x86_64", RuntimeAcceleration::Sycl) => {
+            Ok(vec!["ubuntu-sycl-fp16-x64", "ubuntu-sycl-fp32-x64"])
+        }
+        ("macos", "aarch64", RuntimeAcceleration::Auto | RuntimeAcceleration::Cpu) => {
+            Ok(vec!["macos-arm64"])
+        }
+        ("macos", "x86_64", RuntimeAcceleration::Auto | RuntimeAcceleration::Cpu) => {
+            Ok(vec!["macos-x64"])
+        }
+        ("windows", "x86_64", RuntimeAcceleration::Auto) => Ok(vec![
+            "win-cuda-13.3-x64",
+            "win-cuda-12.4-x64",
+            "win-vulkan-x64",
+        ]),
+        ("windows", "x86_64", RuntimeAcceleration::Cpu) => Ok(vec!["win-cpu-x64"]),
+        ("windows", "x86_64", RuntimeAcceleration::Cuda) => {
+            Ok(vec!["win-cuda-13.3-x64", "win-cuda-12.4-x64"])
+        }
+        ("windows", "x86_64", RuntimeAcceleration::Vulkan) => Ok(vec!["win-vulkan-x64"]),
+        ("windows", "x86_64", RuntimeAcceleration::Rocm) => Ok(vec!["win-hip-radeon-x64"]),
+        ("windows", "x86_64", RuntimeAcceleration::Sycl) => Ok(vec!["win-sycl-x64"]),
+        ("windows", "aarch64", RuntimeAcceleration::Auto | RuntimeAcceleration::Cpu) => {
+            Ok(vec!["win-cpu-arm64"])
+        }
+        (os, arch, _) => Err(format!("No known llama.cpp build for {os}/{arch}")),
     }
 }
 
-fn platform_asset_pattern() -> Result<&'static str, String> {
-    pattern_for(std::env::consts::OS, std::env::consts::ARCH)
+fn platform_asset_patterns(acceleration: RuntimeAcceleration) -> Result<Vec<&'static str>, String> {
+    patterns_for(std::env::consts::OS, std::env::consts::ARCH, acceleration)
 }
 
-fn resolve_release_asset() -> Result<(String, String), String> {
-    let pattern = platform_asset_pattern()?;
+fn resolve_release_asset(acceleration: RuntimeAcceleration) -> Result<(String, String), String> {
+    let patterns = platform_asset_patterns(acceleration)?;
 
     let body = ureq::get(GITHUB_RELEASES_URL)
         .set("User-Agent", "navi-app")
@@ -111,16 +180,20 @@ fn resolve_release_asset() -> Result<(String, String), String> {
         .into_string()
         .map_err(|error| format!("Could not read GitHub release response: {error}"))?;
 
-    let release: ReleaseResponse =
-        serde_json::from_str(&body).map_err(|error| format!("Could not parse GitHub release response: {error}"))?;
+    let release: ReleaseResponse = serde_json::from_str(&body)
+        .map_err(|error| format!("Could not parse GitHub release response: {error}"))?;
 
-    let asset = release
-        .assets
-        .into_iter()
-        .find(|asset| asset.name.contains(pattern) && !asset.name.to_lowercase().contains("cuda"))
-        .ok_or_else(|| format!("No release asset matching '{pattern}' was found"))?;
+    let assets = release.assets;
+    for pattern in &patterns {
+        if let Some(asset) = assets.iter().find(|asset| asset.name.contains(pattern)) {
+            return Ok((asset.browser_download_url.clone(), release.tag_name));
+        }
+    }
 
-    Ok((asset.browser_download_url, release.tag_name))
+    Err(format!(
+        "No llama.cpp release asset matching {} was found",
+        patterns.join(", ")
+    ))
 }
 
 fn runtime_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -132,7 +205,11 @@ fn runtime_root(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn find_server_binary(dir: &Path) -> Option<PathBuf> {
-    let name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+    let name = if cfg!(windows) {
+        "llama-server.exe"
+    } else {
+        "llama-server"
+    };
     let mut stack = vec![dir.to_path_buf()];
 
     while let Some(current) = stack.pop() {
@@ -153,14 +230,27 @@ fn find_server_binary(dir: &Path) -> Option<PathBuf> {
     None
 }
 
-pub fn is_downloaded(app: &AppHandle, binary_override: Option<&str>) -> bool {
+fn runtime_install_root(
+    app: &AppHandle,
+    acceleration: RuntimeAcceleration,
+) -> Result<PathBuf, String> {
+    Ok(runtime_root(app)?.join(acceleration.directory_name()))
+}
+
+pub fn is_downloaded(
+    app: &AppHandle,
+    binary_override: Option<&str>,
+    acceleration: Option<&str>,
+) -> bool {
     if let Some(path) = binary_override {
         if !path.is_empty() {
             return Path::new(path).exists();
         }
     }
 
-    runtime_root(app)
+    let acceleration =
+        RuntimeAcceleration::from_option(acceleration).unwrap_or(RuntimeAcceleration::Auto);
+    runtime_install_root(app, acceleration)
         .map(|root| find_server_binary(&root).is_some())
         .unwrap_or(false)
 }
@@ -176,7 +266,8 @@ fn extract_tar_gz(bytes: Vec<u8>, dest: &Path) -> Result<(), String> {
 
 fn extract_zip(bytes: Vec<u8>, dest: &Path) -> Result<(), String> {
     let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|error| format!("Could not open runtime archive: {error}"))?;
+    let mut archive = zip::ZipArchive::new(cursor)
+        .map_err(|error| format!("Could not open runtime archive: {error}"))?;
 
     for index in 0..archive.len() {
         let mut file = archive
@@ -188,31 +279,36 @@ fn extract_zip(bytes: Vec<u8>, dest: &Path) -> Result<(), String> {
         let out_path = dest.join(relative_path);
 
         if file.name().ends_with('/') {
-            fs::create_dir_all(&out_path).map_err(|error| format!("Could not create directory: {error}"))?;
+            fs::create_dir_all(&out_path)
+                .map_err(|error| format!("Could not create directory: {error}"))?;
             continue;
         }
 
         if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent).map_err(|error| format!("Could not create directory: {error}"))?;
+            fs::create_dir_all(parent)
+                .map_err(|error| format!("Could not create directory: {error}"))?;
         }
 
-        let mut out_file =
-            fs::File::create(&out_path).map_err(|error| format!("Could not write extracted file: {error}"))?;
-        std::io::copy(&mut file, &mut out_file).map_err(|error| format!("Could not extract file: {error}"))?;
+        let mut out_file = fs::File::create(&out_path)
+            .map_err(|error| format!("Could not write extracted file: {error}"))?;
+        std::io::copy(&mut file, &mut out_file)
+            .map_err(|error| format!("Could not extract file: {error}"))?;
     }
 
     Ok(())
 }
 
-pub fn download_and_extract(app: &AppHandle) -> Result<(), String> {
-    let root = runtime_root(app)?;
+pub fn download_and_extract(app: &AppHandle, acceleration: Option<&str>) -> Result<(), String> {
+    let acceleration = RuntimeAcceleration::from_option(acceleration)?;
+    let root = runtime_install_root(app, acceleration)?;
     if find_server_binary(&root).is_some() {
         return Ok(());
     }
 
-    let (url, tag) = resolve_release_asset()?;
+    let (url, tag) = resolve_release_asset(acceleration)?;
     let dir = root.join(tag);
-    fs::create_dir_all(&dir).map_err(|error| format!("Could not create runtime directory: {error}"))?;
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Could not create runtime directory: {error}"))?;
 
     let mut bytes = Vec::new();
     ureq::get(&url)
@@ -229,7 +325,8 @@ pub fn download_and_extract(app: &AppHandle) -> Result<(), String> {
         extract_tar_gz(bytes, &dir)?;
     }
 
-    let binary = find_server_binary(&dir).ok_or_else(|| "Downloaded runtime archive did not contain llama-server".to_string())?;
+    let binary = find_server_binary(&dir)
+        .ok_or_else(|| "Downloaded runtime archive did not contain llama-server".to_string())?;
 
     #[cfg(unix)]
     {
@@ -244,7 +341,11 @@ pub fn download_and_extract(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_binary_path(app: &AppHandle, binary_override: Option<&str>) -> Result<PathBuf, String> {
+fn resolve_binary_path(
+    app: &AppHandle,
+    binary_override: Option<&str>,
+    acceleration: RuntimeAcceleration,
+) -> Result<PathBuf, String> {
     if let Some(path) = binary_override {
         if !path.is_empty() {
             let path_buf = PathBuf::from(path);
@@ -256,20 +357,23 @@ fn resolve_binary_path(app: &AppHandle, binary_override: Option<&str>) -> Result
         }
     }
 
-    let root = runtime_root(app)?;
+    let root = runtime_install_root(app, acceleration)?;
     find_server_binary(&root).ok_or_else(|| "llama.cpp runtime is not downloaded yet".to_string())
 }
 
 fn pick_free_port() -> Result<u16, String> {
-    let listener =
-        TcpListener::bind("127.0.0.1:0").map_err(|error| format!("Could not reserve a local port: {error}"))?;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|error| format!("Could not reserve a local port: {error}"))?;
     listener
         .local_addr()
         .map(|address| address.port())
         .map_err(|error| format!("Could not read reserved port: {error}"))
 }
 
-fn spawn_log_reader<R: Read + Send + 'static>(reader: Option<R>, logs: Arc<Mutex<VecDeque<String>>>) {
+fn spawn_log_reader<R: Read + Send + 'static>(
+    reader: Option<R>,
+    logs: Arc<Mutex<VecDeque<String>>>,
+) {
     let Some(reader) = reader else {
         return;
     };
@@ -316,17 +420,27 @@ fn wait_for_ready(app: &AppHandle, port: u16) -> Result<(), String> {
     Err("Timed out waiting for llama-server to become ready".to_string())
 }
 
-pub fn start(app: &AppHandle, model_id: String, model_path: String, binary_override: Option<String>) -> Result<Value, String> {
+pub fn start(
+    app: &AppHandle,
+    model_id: String,
+    model_path: String,
+    binary_override: Option<String>,
+    acceleration: Option<&str>,
+    gpu_layers: Option<u32>,
+) -> Result<Value, String> {
     if !Path::new(&model_path).exists() {
         return Err(format!("Model file not found: {model_path}"));
     }
 
-    let binary = resolve_binary_path(app, binary_override.as_deref())?;
+    let acceleration = RuntimeAcceleration::from_option(acceleration)?;
+    let binary = resolve_binary_path(app, binary_override.as_deref(), acceleration)?;
 
     {
         let state = app.state::<RuntimeState>();
         let inner = state.0.lock().unwrap();
-        if inner.state == RuntimeStatusState::Ready && inner.model_id.as_deref() == Some(model_id.as_str()) {
+        if inner.state == RuntimeStatusState::Ready
+            && inner.model_id.as_deref() == Some(model_id.as_str())
+        {
             return Ok(status_json(&inner));
         }
     }
@@ -336,9 +450,24 @@ pub fn start(app: &AppHandle, model_id: String, model_path: String, binary_overr
     let port = pick_free_port()?;
     let mut command = Command::new(&binary);
     command
-        .args(["-m", &model_path, "--port", &port.to_string(), "--host", "127.0.0.1"])
+        .args([
+            "-m",
+            &model_path,
+            "--port",
+            &port.to_string(),
+            "--host",
+            "127.0.0.1",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    if acceleration.uses_gpu_layers() {
+        let layers = gpu_layers
+            .unwrap_or(DEFAULT_GPU_LAYERS)
+            .clamp(0, 999)
+            .to_string();
+        command.args(["--n-gpu-layers", &layers]);
+    }
 
     let mut child = command
         .spawn()
@@ -371,13 +500,23 @@ pub fn start(app: &AppHandle, model_id: String, model_path: String, binary_overr
         Err(reason) => {
             let recent_logs = {
                 let buffer = inner.logs.lock().unwrap();
-                buffer.iter().rev().take(5).cloned().collect::<Vec<_>>().join(" | ")
+                buffer
+                    .iter()
+                    .rev()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" | ")
             };
             if let Some(mut child) = inner.child.take() {
                 let _ = child.kill();
             }
             inner.state = RuntimeStatusState::Error;
-            inner.message = Some(if recent_logs.is_empty() { reason } else { format!("{reason} ({recent_logs})") });
+            inner.message = Some(if recent_logs.is_empty() {
+                reason
+            } else {
+                format!("{reason} ({recent_logs})")
+            });
         }
     }
 
@@ -406,22 +545,45 @@ mod tests {
     fn picks_a_free_port_that_is_bindable() {
         let port = pick_free_port().expect("should reserve a port");
         assert!(port > 0);
-        TcpListener::bind(("127.0.0.1", port)).expect("port should be free again after the listener drops");
+        TcpListener::bind(("127.0.0.1", port))
+            .expect("port should be free again after the listener drops");
     }
 
     #[test]
     fn matches_known_platform_asset_patterns() {
-        assert_eq!(pattern_for("linux", "x86_64"), Ok("ubuntu-x64"));
-        assert_eq!(pattern_for("macos", "aarch64"), Ok("macos-arm64"));
-        assert_eq!(pattern_for("macos", "x86_64"), Ok("macos-x64"));
-        assert_eq!(pattern_for("windows", "x86_64"), Ok("win-cpu-x64"));
-        assert!(pattern_for("freebsd", "x86_64").is_err());
+        assert_eq!(
+            patterns_for("linux", "x86_64", RuntimeAcceleration::Auto),
+            Ok(vec!["ubuntu-vulkan-x64"])
+        );
+        assert_eq!(
+            patterns_for("linux", "x86_64", RuntimeAcceleration::Cpu),
+            Ok(vec!["ubuntu-x64"])
+        );
+        assert_eq!(
+            patterns_for("linux", "x86_64", RuntimeAcceleration::Rocm),
+            Ok(vec!["ubuntu-rocm"])
+        );
+        assert_eq!(
+            patterns_for("windows", "x86_64", RuntimeAcceleration::Auto),
+            Ok(vec![
+                "win-cuda-13.3-x64",
+                "win-cuda-12.4-x64",
+                "win-vulkan-x64"
+            ])
+        );
+        assert_eq!(
+            patterns_for("macos", "aarch64", RuntimeAcceleration::Auto),
+            Ok(vec!["macos-arm64"])
+        );
+        assert!(patterns_for("freebsd", "x86_64", RuntimeAcceleration::Auto).is_err());
     }
 
     #[test]
     fn log_reader_caps_buffered_lines() {
         let logs: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let data: String = (0..(MAX_LOG_LINES + 10)).map(|index| format!("line {index}\n")).collect();
+        let data: String = (0..(MAX_LOG_LINES + 10))
+            .map(|index| format!("line {index}\n"))
+            .collect();
         let cursor = std::io::Cursor::new(data.into_bytes());
         spawn_log_reader(Some(cursor), Arc::clone(&logs));
 

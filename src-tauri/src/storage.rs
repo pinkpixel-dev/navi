@@ -327,6 +327,11 @@ impl NaviStorage {
         Ok(configs)
     }
 
+    pub fn delete_provider_config(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn.execute("DELETE FROM provider_configs WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
     pub fn save_local_model(&self, model: &Value) -> rusqlite::Result<()> {
         self.conn.execute(
             "
@@ -724,6 +729,14 @@ mod tests {
         assert_eq!(configs[0]["name"], "Local compatible");
         assert!(configs[0].get("apiKey").is_none());
         assert!(!configs[0].to_string().contains("should-not-save"));
+
+        storage
+            .delete_provider_config("provider-1")
+            .expect("provider should delete");
+        let configs = storage
+            .load_provider_configs()
+            .expect("providers should load after delete");
+        assert!(configs.is_empty());
     }
 
     #[test]

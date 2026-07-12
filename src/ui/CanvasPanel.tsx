@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { PointerEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Archive, ChevronLeft, ChevronRight, Code2, Copy, Download, Eye, FileText, PanelRightClose } from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
@@ -10,6 +10,7 @@ mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" 
 
 interface CanvasPanelProps {
   groups: ArtifactGroup[];
+  onResizeStart: (event: PointerEvent<HTMLDivElement>) => void;
   onClose: () => void;
 }
 
@@ -108,7 +109,7 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   }
 }
 
-export function CanvasPanel({ groups, onClose }: CanvasPanelProps) {
+export function CanvasPanel({ groups, onResizeStart, onClose }: CanvasPanelProps) {
   const [selectedGroupKey, setSelectedGroupKey] = useState<string | null>(null);
   const [revisionIndexByGroup, setRevisionIndexByGroup] = useState<Record<string, number>>({});
   const [view, setView] = useState<"preview" | "raw">("preview");
@@ -192,6 +193,7 @@ export function CanvasPanel({ groups, onClose }: CanvasPanelProps) {
 
   return (
     <aside className="canvas-panel">
+      <div className="canvas-resizer" role="separator" aria-label="Resize canvas" onPointerDown={onResizeStart} />
       <header>
         <div>
           <h2>Canvas</h2>

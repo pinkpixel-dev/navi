@@ -84,6 +84,20 @@ describe("provider config repository", () => {
     expect(await repository.loadProviderConfigs()).toEqual([]);
   });
 
+  test("removes provider configs and saved browser fallback keys", async () => {
+    const driver = createMemoryProviderConfigDriver(createIsolatedStore());
+    const repository = createProviderConfigRepository(driver);
+
+    await repository.saveProviderConfig({
+      ...compatibleProvider,
+      apiKey: "secret-key",
+    });
+    await repository.removeProviderConfig("provider-1");
+
+    expect(await repository.loadProviderConfigs()).toEqual([]);
+    expect(await repository.getProviderApiKey("provider-1")).toBeNull();
+  });
+
   test("persists browser fallback provider configs and keys across driver instances", async () => {
     const storage = createMockStorage();
     const firstRepository = createProviderConfigRepository(createLocalStorageProviderConfigDriver(storage));

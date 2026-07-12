@@ -4,6 +4,8 @@ export interface AppSettings {
   submitShortcut: SubmitShortcut;
   lastModelId?: string;
   customLlamaServerPath?: string;
+  localRuntimeAcceleration?: "auto" | "cpu" | "cuda" | "vulkan" | "rocm" | "sycl";
+  localRuntimeGpuLayers?: number;
   /** Built-in tool names the user enabled. Undefined means the default set. */
   enabledBuiltinTools?: string[];
   /** Data-URI avatar overrides; the bundled user.png/assistant.png are used when unset. */

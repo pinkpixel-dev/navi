@@ -24,11 +24,49 @@ interface ChatWorkspaceProps {
 }
 
 const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const textDocumentExtensions = new Set([
+  "txt",
+  "md",
+  "markdown",
+  "json",
+  "csv",
+  "tsv",
+  "xml",
+  "yaml",
+  "yml",
+  "toml",
+  "log",
+  "py",
+  "js",
+  "ts",
+  "tsx",
+  "jsx",
+  "rs",
+  "go",
+  "java",
+  "c",
+  "cpp",
+  "h",
+  "css",
+  "html",
+  "sh",
+  "sql",
+]);
 const maxAttachmentBytes = 10 * 1024 * 1024;
+
+function isSupportedTextDocument(file: File): boolean {
+  const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+  return file.type.startsWith("text/") || textDocumentExtensions.has(extension);
+}
 
 function readFileAsAttachment(file: File): Promise<MessageAttachment> {
   return new Promise((resolve, reject) => {
     const isImage = imageMimeTypes.has(file.type);
+    if (!isImage && !isSupportedTextDocument(file)) {
+      reject(new Error(`${file.name} is not a supported attachment yet. Use images or text-based documents.`));
+      return;
+    }
+
     const reader = new FileReader();
 
     reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
@@ -358,7 +396,6 @@ export function ChatWorkspace({
             type="file"
             multiple
             hidden
-            accept="image/png,image/jpeg,image/gif,image/webp,.txt,.md,.markdown,.json,.csv,.tsv,.xml,.yaml,.yml,.toml,.log,.py,.js,.ts,.tsx,.jsx,.rs,.go,.java,.c,.cpp,.h,.css,.html,.sh,.sql"
             onChange={handleAttachFiles}
           />
           <button
