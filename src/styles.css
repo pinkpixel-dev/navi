@@ -288,6 +288,34 @@ button {
   font-size: 12px;
 }
 
+.project-filter {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #262a30;
+  border-radius: 8px;
+  outline: 0;
+  color: #c6cedb;
+  background: #131519;
+  font-size: 13px;
+}
+
+.archived-toggle {
+  margin-top: 10px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+}
+
+.archived-toggle h2 {
+  margin: 0 0 2px;
+  color: #c4c9d0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .chat-workspace {
   display: grid;
   grid-template-rows: auto 1fr auto;
@@ -575,10 +603,15 @@ button {
 
 .composer {
   display: grid;
-  grid-template-columns: 1fr 46px;
   gap: 10px;
   padding: 16px 20px 20px;
   border-top: 1px solid #23262b;
+}
+
+.composer-row {
+  display: grid;
+  grid-template-columns: 46px 1fr 46px;
+  gap: 10px;
 }
 
 .composer textarea {
@@ -593,15 +626,99 @@ button {
   color: #f7f7f5;
 }
 
-.send-button {
+.send-button,
+.attach-button {
   width: 46px;
   height: 46px;
   align-self: end;
 }
 
-.send-button:disabled {
+.attach-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #262a30;
+  border-radius: 8px;
+  color: #9da3ad;
+  background: #131519;
+}
+
+.attach-button:hover:not(:disabled) {
+  color: #7ce7ff;
+  border-color: #3a3f47;
+}
+
+.send-button:disabled,
+.attach-button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.composer-attachments,
+.attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.attachment-list {
+  margin-top: 8px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid #2d323a;
+  border-radius: 999px;
+  background: #101114;
+  color: #c6cedb;
+  font-size: 12px;
+}
+
+.attachment-chip img {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.attachment-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-chip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: #9199a6;
+}
+
+.attachment-chip button:hover {
+  background: rgba(255, 92, 92, 0.15);
+  color: #ff9a9a;
+}
+
+.attachment-error {
+  color: #ff9a9a;
+  font-size: 12px;
+}
+
+.message-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
 }
 
 .canvas-panel {
@@ -648,6 +765,9 @@ button {
 }
 
 .artifact {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -659,13 +779,173 @@ button {
   border-bottom: 1px solid #262a30;
 }
 
-.artifact pre {
+.artifact-title select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 8px;
+  border: 1px solid #262a30;
+  border-radius: 6px;
+  color: #f7f7f5;
+  background: #131519;
+  font-size: 13px;
+}
+
+.artifact-revisions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+  color: #9da3ad;
+}
+
+.artifact-revisions small {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.artifact-revisions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #262a30;
+  border-radius: 5px;
+  background: #131519;
+  color: #9da3ad;
+}
+
+.artifact-revisions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.artifact pre,
+.artifact-code {
   margin: 0;
   padding: 16px;
   overflow: auto;
   color: #e9ecef;
   line-height: 1.55;
   white-space: pre-wrap;
+  font-size: 13px;
+}
+
+.artifact-body {
+  min-height: 0;
+  overflow: auto;
+}
+
+.artifact-language {
+  display: inline-block;
+  margin: 10px 14px 0;
+  padding: 2px 8px;
+  border: 1px solid #2d323a;
+  border-radius: 999px;
+  color: #9da3ad;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.artifact-error {
+  margin: 12px 14px 0;
+  color: #ff9a9a;
+  font-size: 13px;
+}
+
+.artifact-frame {
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  border: 0;
+  background: #ffffff;
+}
+
+.artifact-image-wrap {
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.artifact-image,
+.artifact-image-wrap svg,
+.artifact-image-wrap img {
+  max-width: 100%;
+  height: auto;
+}
+
+.artifact-markdown {
+  padding: 16px 18px;
+  color: #e9ecef;
+  line-height: 1.6;
+  font-size: 14px;
+}
+
+.artifact-markdown h1,
+.artifact-markdown h2,
+.artifact-markdown h3 {
+  margin: 18px 0 8px;
+  color: #f7f7f5;
+  line-height: 1.3;
+}
+
+.artifact-markdown h1:first-child,
+.artifact-markdown h2:first-child {
+  margin-top: 0;
+}
+
+.artifact-markdown p {
+  margin: 8px 0;
+}
+
+.artifact-markdown a {
+  color: #7ce7ff;
+}
+
+.artifact-markdown code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: #101114;
+  font-size: 13px;
+}
+
+.artifact-markdown pre {
+  padding: 12px;
+  border: 1px solid #262a30;
+  border-radius: 8px;
+  background: #101114;
+  overflow-x: auto;
+}
+
+.artifact-markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.artifact-markdown blockquote {
+  margin: 10px 0;
+  padding: 4px 14px;
+  border-left: 3px solid #2d323a;
+  color: #b8bec9;
+}
+
+.artifact-markdown table {
+  margin: 10px 0;
+  border-collapse: collapse;
+}
+
+.artifact-markdown th,
+.artifact-markdown td {
+  padding: 6px 10px;
+  border: 1px solid #2d323a;
+  text-align: left;
+}
+
+.artifact-markdown img {
+  max-width: 100%;
 }
 
 .settings-scrim {
@@ -793,6 +1073,36 @@ button {
   height: 15px;
   flex-shrink: 0;
   accent-color: #7ce7ff;
+}
+
+.settings-avatar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-avatar-row span {
+  min-width: 70px;
+  color: #c2c8d3;
+  font-size: 13px;
+}
+
+.settings-avatar-row button {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid #262a30;
+  border-radius: 6px;
+  color: #f7f7f5;
+  background: #181a1e;
+  font-size: 12px;
+}
+
+.settings-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 1px solid #262a30;
+  object-fit: cover;
 }
 
 @media (max-width: 1120px) {

@@ -4,6 +4,11 @@ export interface AppSettings {
   submitShortcut: SubmitShortcut;
   lastModelId?: string;
   customLlamaServerPath?: string;
+  /** Built-in tool names the user enabled. Undefined means the default set. */
+  enabledBuiltinTools?: string[];
+  /** Data-URI avatar overrides; the bundled user.png/assistant.png are used when unset. */
+  userAvatar?: string;
+  assistantAvatar?: string;
 }
 
 export const defaultAppSettings: AppSettings = {

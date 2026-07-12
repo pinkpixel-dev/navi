@@ -1,9 +1,8 @@
-import { FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { FolderOpen, KeyRound, Play, Plug, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
+import { builtinTools, defaultEnabledBuiltinToolNames } from "../core/tools/builtinTools";
 import { open } from "@tauri-apps/plugin-dialog";
-import { createOpenAICompatibleProvider } from "../core/providers/openAICompatibleProvider";
-import { createOpenAIProvider } from "../core/providers/openAIProvider";
-import { createOllamaProvider } from "../core/providers/ollamaProvider";
+import { createProviderFromConfig } from "../core/providers/createProvider";
 import {
   createDefaultProviderConfigRepository,
   type ProviderConfig,
@@ -107,6 +106,41 @@ function createDraftProvider(): ProviderConfig {
   };
 }
 
+const providerTypesWithRequiredKey = new Set<ProviderType>(["openai", "anthropic", "gemini", "openrouter"]);
+const providerTypesWithBaseUrl = new Set<ProviderType>(["openai-compatible", "ollama", "lmstudio"]);
+
+function defaultBaseUrlForType(type: ProviderType): string | undefined {
+  switch (type) {
+    case "openai-compatible":
+      return "http://localhost:8080/v1";
+    case "ollama":
+      return "http://localhost:11434/v1";
+    case "lmstudio":
+      return "http://localhost:1234/v1";
+    default:
+      return undefined;
+  }
+}
+
+function providerEndpointLabel(provider: ProviderConfig): string {
+  switch (provider.type) {
+    case "openai":
+      return "api.openai.com";
+    case "anthropic":
+      return "api.anthropic.com";
+    case "gemini":
+      return "generativelanguage.googleapis.com";
+    case "openrouter":
+      return "openrouter.ai";
+    case "ollama":
+      return `${provider.baseUrl ?? "http://localhost:11434/v1"} (Ollama)`;
+    case "lmstudio":
+      return `${provider.baseUrl ?? "http://localhost:1234/v1"} (LM Studio)`;
+    default:
+      return provider.baseUrl ?? "No endpoint URL";
+  }
+}
+
 export function SettingsPanel({
   providerConfigs,
   onProviderConfigsChange,
@@ -155,8 +189,37 @@ export function SettingsPanel({
     return () => window.clearInterval(interval);
   }, [isRuntimeBusy]);
 
+  const userAvatarInputRef = useRef<HTMLInputElement>(null);
+  const assistantAvatarInputRef = useRef<HTMLInputElement>(null);
+
   const updateDraft = (patch: Partial<ProviderConfig>) => {
     setDraftProvider((current) => ({ ...current, ...patch }));
+  };
+
+  const enabledToolNames = appSettings.enabledBuiltinTools ?? defaultEnabledBuiltinToolNames();
+
+  const handleToggleBuiltinTool = (name: string) => {
+    const next = enabledToolNames.includes(name)
+      ? enabledToolNames.filter((toolName) => toolName !== name)
+      : [...enabledToolNames, name];
+    onAppSettingsChange({ ...appSettings, enabledBuiltinTools: next });
+  };
+
+  const handleAvatarUpload = (role: "user" | "assistant") => (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUri = String(reader.result ?? "");
+      onAppSettingsChange(
+        role === "user" ? { ...appSettings, userAvatar: dataUri } : { ...appSettings, assistantAvatar: dataUri },
+      );
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleToggleModelEnabled = (modelId: string) => {
@@ -178,35 +241,20 @@ export function SettingsPanel({
   };
 
   const handleFetchModels = async () => {
-    let provider: ReturnType<typeof createOpenAICompatibleProvider>;
+    if (draftProvider.type === "openai-compatible" && !draftProvider.baseUrl) {
+      setStatus("Add a base URL before fetching models.");
+      return;
+    }
 
-    if (draftProvider.type === "openai-compatible") {
-      if (!draftProvider.baseUrl) {
-        setStatus("Add a base URL before fetching models.");
-        return;
-      }
+    const savedKey = apiKey || (await providerConfigRepository.getProviderApiKey(draftProvider.id).catch(() => null));
+    const provider = createProviderFromConfig(draftProvider, {
+      apiKey: savedKey,
+      model: draftProvider.defaultModelId || "model",
+    });
 
-      provider = createOpenAICompatibleProvider({
-        baseUrl: draftProvider.baseUrl,
-        apiKey: apiKey || undefined,
-        model: draftProvider.defaultModelId || "model",
-      });
-    } else if (draftProvider.type === "ollama") {
-      provider = createOllamaProvider({
-        baseUrl: draftProvider.baseUrl || undefined,
-        apiKey: apiKey || undefined,
-        model: draftProvider.defaultModelId || "model",
-      });
-    } else {
-      if (!apiKey && !draftProvider.hasApiKey) {
-        setStatus("Add an API key before fetching models.");
-        return;
-      }
-
-      provider = createOpenAIProvider({
-        apiKey: apiKey || (await providerConfigRepository.getProviderApiKey(draftProvider.id)) || "",
-        model: draftProvider.defaultModelId || "gpt-4o-mini",
-      });
+    if (!provider) {
+      setStatus("Add an API key before fetching models.");
+      return;
     }
 
     try {
@@ -434,6 +482,75 @@ export function SettingsPanel({
               </select>
             </label>
           </div>
+          <div className="settings-form">
+            <h3>Built-in Tools</h3>
+            <p className="settings-note">
+              These run inside Navi without an MCP server. Toggle which ones the model can call.
+            </p>
+            <div className="settings-model-list">
+              {builtinTools.map((tool) => (
+                <label className="settings-model-checkbox" key={tool.name}>
+                  <input
+                    type="checkbox"
+                    checked={enabledToolNames.includes(tool.name)}
+                    onChange={() => handleToggleBuiltinTool(tool.name)}
+                  />
+                  <span>
+                    <strong>{tool.name}</strong> — {tool.description}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="settings-form">
+            <h3>Avatars</h3>
+            <p className="settings-note">Shown next to messages. PNG, JPEG, GIF, or WebP.</p>
+            <div className="settings-avatar-row">
+              <img className="settings-avatar" src={appSettings.userAvatar ?? "/user.png"} alt="User avatar" />
+              <span>You</span>
+              <input
+                ref={userAvatarInputRef}
+                type="file"
+                hidden
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                onChange={handleAvatarUpload("user")}
+              />
+              <button type="button" onClick={() => userAvatarInputRef.current?.click()}>
+                Change
+              </button>
+              {appSettings.userAvatar ? (
+                <button type="button" onClick={() => onAppSettingsChange({ ...appSettings, userAvatar: undefined })}>
+                  Reset
+                </button>
+              ) : null}
+            </div>
+            <div className="settings-avatar-row">
+              <img
+                className="settings-avatar"
+                src={appSettings.assistantAvatar ?? "/assistant.png"}
+                alt="Assistant avatar"
+              />
+              <span>Assistant</span>
+              <input
+                ref={assistantAvatarInputRef}
+                type="file"
+                hidden
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                onChange={handleAvatarUpload("assistant")}
+              />
+              <button type="button" onClick={() => assistantAvatarInputRef.current?.click()}>
+                Change
+              </button>
+              {appSettings.assistantAvatar ? (
+                <button
+                  type="button"
+                  onClick={() => onAppSettingsChange({ ...appSettings, assistantAvatar: undefined })}
+                >
+                  Reset
+                </button>
+              ) : null}
+            </div>
+          </div>
           <form className="settings-form" onSubmit={handleSubmit}>
             <h3>Provider Setup</h3>
             <label>
@@ -460,21 +577,22 @@ export function SettingsPanel({
                 value={draftProvider.type}
                 onChange={(event) => {
                   const nextType = event.target.value as ProviderType;
-                  let nextBaseUrl = draftProvider.baseUrl;
-                  if (nextType === "openai") {
-                    nextBaseUrl = undefined;
-                  } else if (nextType === "ollama" && !nextBaseUrl) {
-                    nextBaseUrl = "http://localhost:11434/v1";
-                  }
+                  const nextBaseUrl = providerTypesWithBaseUrl.has(nextType)
+                    ? draftProvider.baseUrl || defaultBaseUrlForType(nextType)
+                    : undefined;
                   updateDraft({ type: nextType, baseUrl: nextBaseUrl });
                 }}
               >
                 <option value="openai-compatible">OpenAI-compatible</option>
                 <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="gemini">Google Gemini</option>
+                <option value="openrouter">OpenRouter</option>
                 <option value="ollama">Ollama</option>
+                <option value="lmstudio">LM Studio</option>
               </select>
             </label>
-            {draftProvider.type !== "openai" ? (
+            {providerTypesWithBaseUrl.has(draftProvider.type) ? (
               <label>
                 <span>Base URL</span>
                 <input
@@ -484,15 +602,15 @@ export function SettingsPanel({
               </label>
             ) : null}
             <label>
-              <span>API key{draftProvider.type === "openai" ? "" : " (optional)"}</span>
+              <span>API key{providerTypesWithRequiredKey.has(draftProvider.type) ? "" : " (optional)"}</span>
               <input
                 type="password"
                 value={apiKey}
                 placeholder={
                   draftProvider.hasApiKey
                     ? "Saved key available"
-                    : draftProvider.type === "openai"
-                    ? "Required for api.openai.com"
+                    : providerTypesWithRequiredKey.has(draftProvider.type)
+                    ? `Required for ${providerEndpointLabel(draftProvider)}`
                     : "No key required for some endpoints"
                 }
                 onChange={(event) => setApiKey(event.target.value)}
@@ -789,9 +907,7 @@ export function SettingsPanel({
                 >
                   <strong>{provider.name}</strong>
                   <span>
-                    {provider.hasApiKey ? "saved key" : "key optional"} /{" "}
-                    {provider.type === "openai" ? "api.openai.com" : provider.baseUrl ?? "No endpoint URL"}
-                    {provider.type === "ollama" ? " (Ollama)" : ""}
+                    {provider.hasApiKey ? "saved key" : "key optional"} / {providerEndpointLabel(provider)}
                   </span>
                 </button>
               ))

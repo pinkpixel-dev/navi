@@ -1,6 +1,6 @@
-import { FormEvent, KeyboardEvent, useEffect, useMemo, useState } from "react";
-import { PanelRightOpen, Send, Square } from "lucide-react";
-import type { Conversation, ToolCallEvent } from "../core/conversation/types";
+import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FileText, Paperclip, PanelRightOpen, Send, Square, X } from "lucide-react";
+import type { Conversation, MessageAttachment, ToolCallEvent } from "../core/conversation/types";
 import type { ChatRunState } from "../core/chat-state/chatRunReducer";
 import type { ApprovalDecision } from "../core/agent-loop/types";
 import type { ProviderModel } from "../core/providers/types";
@@ -13,12 +13,71 @@ interface ChatWorkspaceProps {
   isCanvasOpen: boolean;
   availableModels: ProviderModel[];
   submitShortcut: SubmitShortcut;
+  userAvatarSrc: string;
+  assistantAvatarSrc: string;
   pendingApprovalToolCall: ToolCallEvent | null;
   onApprovalDecision: (decision: ApprovalDecision) => void;
   onCancelRun: () => void;
   onModelChange: (model: ProviderModel) => void;
   onToggleCanvas: () => void;
-  onSend: (content: string) => void;
+  onSend: (content: string, attachments?: MessageAttachment[]) => void;
+}
+
+const imageMimeTypes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const maxAttachmentBytes = 10 * 1024 * 1024;
+
+function readFileAsAttachment(file: File): Promise<MessageAttachment> {
+  return new Promise((resolve, reject) => {
+    const isImage = imageMimeTypes.has(file.type);
+    const reader = new FileReader();
+
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.onload = () => {
+      if (isImage) {
+        const dataUri = String(reader.result ?? "");
+        const base64 = dataUri.slice(dataUri.indexOf(",") + 1);
+        resolve({
+          id: crypto.randomUUID(),
+          kind: "image",
+          name: file.name,
+          mimeType: file.type,
+          data: base64,
+        });
+      } else {
+        resolve({
+          id: crypto.randomUUID(),
+          kind: "text",
+          name: file.name,
+          mimeType: file.type || "text/plain",
+          data: String(reader.result ?? ""),
+        });
+      }
+    };
+
+    if (isImage) {
+      reader.readAsDataURL(file);
+    } else {
+      reader.readAsText(file);
+    }
+  });
+}
+
+function AttachmentChip({ attachment, onRemove }: { attachment: MessageAttachment; onRemove?: () => void }) {
+  return (
+    <span className="attachment-chip">
+      {attachment.kind === "image" ? (
+        <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt={attachment.name} />
+      ) : (
+        <FileText size={13} />
+      )}
+      <span className="attachment-name">{attachment.name}</span>
+      {onRemove ? (
+        <button type="button" aria-label={`Remove ${attachment.name}`} onClick={onRemove}>
+          <X size={12} />
+        </button>
+      ) : null}
+    </span>
+  );
 }
 
 export function ChatWorkspace({
@@ -28,6 +87,8 @@ export function ChatWorkspace({
   isCanvasOpen,
   availableModels,
   submitShortcut,
+  userAvatarSrc,
+  assistantAvatarSrc,
   pendingApprovalToolCall,
   onApprovalDecision,
   onCancelRun,
@@ -36,6 +97,9 @@ export function ChatWorkspace({
   onSend,
 }: ChatWorkspaceProps) {
   const [draft, setDraft] = useState("");
+  const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedProvider, setSelectedProvider] = useState(
     () => availableModels.find((model) => model.id === conversation.model)?.provider ?? "",
   );
@@ -74,14 +138,39 @@ export function ChatWorkspace({
     }
   };
 
+  const handleAttachFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    event.target.value = "";
+    setAttachmentError(null);
+
+    for (const file of files) {
+      if (file.size > maxAttachmentBytes) {
+        setAttachmentError(`${file.name} is larger than 10MB.`);
+        continue;
+      }
+      try {
+        const attachment = await readFileAsAttachment(file);
+        setAttachments((current) => [...current, attachment]);
+      } catch (error) {
+        setAttachmentError(error instanceof Error ? error.message : `Could not read ${file.name}.`);
+      }
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    setAttachments((current) => current.filter((attachment) => attachment.id !== id));
+  };
+
   const submitDraft = () => {
     if (isRunning) {
       onCancelRun();
       return;
     }
 
-    onSend(draft);
+    onSend(draft, attachments.length ? attachments : undefined);
     setDraft("");
+    setAttachments([]);
+    setAttachmentError(null);
   };
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -101,6 +190,27 @@ export function ChatWorkspace({
 
     event.preventDefault();
     submitDraft();
+  };
+
+  const avatarFor = (role: string): string | null => {
+    if (role === "user") {
+      return userAvatarSrc;
+    }
+    if (role === "assistant") {
+      return assistantAvatarSrc;
+    }
+    return null;
+  };
+
+  const renderRoleHeader = (role: string) => {
+    const avatar = avatarFor(role);
+    return avatar ? (
+      <div className="message-role">
+        <img className="message-avatar" src={avatar} alt={role} />
+      </div>
+    ) : (
+      <div className="message-role">{role}</div>
+    );
   };
 
   return (
@@ -160,7 +270,14 @@ export function ChatWorkspace({
         ) : (
           conversation.messages.map((message) => (
             <article className={`message ${message.role}`} key={message.id}>
-              <div className="message-role">{message.role}</div>
+              {renderRoleHeader(message.role)}
+              {message.attachments?.length ? (
+                <div className="attachment-list">
+                  {message.attachments.map((attachment) => (
+                    <AttachmentChip key={attachment.id} attachment={attachment} />
+                  ))}
+                </div>
+              ) : null}
               <p>{message.content}</p>
               {message.toolCalls?.length ? (
                 <div className="tool-stack">
@@ -181,7 +298,7 @@ export function ChatWorkspace({
         )}
         {isRunning ? (
           <article className="message assistant pending">
-            <div className="message-role">assistant</div>
+            {renderRoleHeader("assistant")}
             <p>{runState.pendingAssistantMessage?.content || "Thinking..."}</p>
             {runState.toolCalls.length ? (
               <div className="tool-stack">
@@ -223,16 +340,52 @@ export function ChatWorkspace({
       </div>
 
       <form className="composer" onSubmit={handleSubmit}>
-        <textarea
-          aria-label="Message"
-          placeholder="Ask anything..."
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={handleKeyDown}
-        />
-        <button className="send-button" type="submit" disabled={!isRunning && !draft.trim()}>
-          {isRunning ? <Square size={17} /> : <Send size={17} />}
-        </button>
+        {attachments.length || attachmentError ? (
+          <div className="composer-attachments">
+            {attachments.map((attachment) => (
+              <AttachmentChip
+                key={attachment.id}
+                attachment={attachment}
+                onRemove={() => removeAttachment(attachment.id)}
+              />
+            ))}
+            {attachmentError ? <span className="attachment-error">{attachmentError}</span> : null}
+          </div>
+        ) : null}
+        <div className="composer-row">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            accept="image/png,image/jpeg,image/gif,image/webp,.txt,.md,.markdown,.json,.csv,.tsv,.xml,.yaml,.yml,.toml,.log,.py,.js,.ts,.tsx,.jsx,.rs,.go,.java,.c,.cpp,.h,.css,.html,.sh,.sql"
+            onChange={handleAttachFiles}
+          />
+          <button
+            className="attach-button"
+            type="button"
+            aria-label="Attach files"
+            title="Attach images or documents"
+            disabled={isRunning}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <Paperclip size={17} />
+          </button>
+          <textarea
+            aria-label="Message"
+            placeholder="Ask anything..."
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleKeyDown}
+          />
+          <button
+            className="send-button"
+            type="submit"
+            disabled={!isRunning && !draft.trim() && !attachments.length}
+          >
+            {isRunning ? <Square size={17} /> : <Send size={17} />}
+          </button>
+        </div>
       </form>
     </section>
   );

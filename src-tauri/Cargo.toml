@@ -25,6 +25,7 @@ ureq = "2"
 tar = "0.4"
 flate2 = "1"
 zip = "2"
+base64 = "0.22"
 tokio = { version = "1", features = ["full"] }
 rmcp = { version = "2", features = ["client", "transport-child-process", "transport-streamable-http-client", "transport-streamable-http-client-reqwest", "reqwest-native-tls"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream"] }

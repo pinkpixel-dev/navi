@@ -5,16 +5,16 @@ import { Sidebar } from "./ui/Sidebar";
 import { SettingsPanel } from "./ui/SettingsPanel";
 import { confirmDestructiveAction } from "./ui/confirmDialog";
 import { seedConversations } from "./core/conversation/seed";
-import type { Conversation, ChatMessage, ToolCallEvent } from "./core/conversation/types";
+import type { Conversation, ChatMessage, MessageAttachment, ToolCallEvent } from "./core/conversation/types";
+import { builtinToolSchema, enabledBuiltinTools } from "./core/tools/builtinTools";
 import { runAgentLoop } from "./core/agent-loop/agentLoop";
 import type { ApprovalDecision, RunEvent } from "./core/agent-loop/types";
 import { chatRunReducer, createInitialChatRunState } from "./core/chat-state/chatRunReducer";
-import { createArtifactFromMessage } from "./canvas/artifacts";
+import { collectConversationArtifacts, groupArtifactRevisions } from "./canvas/artifacts";
 import { createDefaultConversationRepository } from "./persistence/conversationRepository";
 import { createDefaultProviderConfigRepository, type ProviderConfig } from "./core/providers/providerConfig";
 import { createOpenAICompatibleProvider } from "./core/providers/openAICompatibleProvider";
-import { createOpenAIProvider } from "./core/providers/openAIProvider";
-import { createOllamaProvider } from "./core/providers/ollamaProvider";
+import { createProviderFromConfig } from "./core/providers/createProvider";
 import { providerModels } from "./core/providers/registry";
 import type {
   ChatProvider,
@@ -88,11 +88,11 @@ function createModelFromLocalModel(model: LocalModel): ProviderModel {
   };
 }
 
-function createBlankConversation(model?: ProviderModel): Conversation {
+function createBlankConversation(model?: ProviderModel, projectName?: string): Conversation {
   return {
     id: crypto.randomUUID(),
     title: "New chat",
-    projectName: "Navi",
+    projectName: projectName?.trim() || "Navi",
     provider: model?.provider ?? "No provider",
     model: model?.id ?? "",
     processing: model?.location === "cloud" ? "cloud" : model?.location === "local" ? "local" : "external",
@@ -164,10 +164,9 @@ export default function App() {
     [activeConversationId, conversations],
   );
 
-  const activeArtifact = useMemo(
-    () => createArtifactFromMessage(activeConversation.messages.at(-1)),
-    [activeConversation.messages],
-  );
+  const conversationArtifacts = useMemo(() => collectConversationArtifacts(activeConversation), [activeConversation]);
+  const artifactGroups = useMemo(() => groupArtifactRevisions(conversationArtifacts), [conversationArtifacts]);
+  const latestArtifact = conversationArtifacts.at(-1) ?? null;
   const availableModels = useMemo(
     () => [
       ...providerModels,
@@ -188,25 +187,33 @@ export default function App() {
     return route;
   }, [mcpConnections, mcpServers]);
 
+  const activeBuiltinTools = useMemo(
+    () => enabledBuiltinTools(appSettings.enabledBuiltinTools),
+    [appSettings.enabledBuiltinTools],
+  );
+
   const availableTools = useMemo<ProviderToolSchema[]>(() => {
-    const tools: ProviderToolSchema[] = [];
+    const tools: ProviderToolSchema[] = activeBuiltinTools.map(builtinToolSchema);
     for (const status of Object.values(mcpConnections)) {
       for (const tool of status.tools) {
         tools.push(toProviderToolSchema(tool));
       }
     }
     return tools;
-  }, [mcpConnections]);
+  }, [activeBuiltinTools, mcpConnections]);
 
   const toolRiskByName = useMemo(() => {
     const risks = new Map<string, ToolCallEvent["risk"]>();
+    for (const tool of activeBuiltinTools) {
+      risks.set(tool.name, tool.risk);
+    }
     for (const status of Object.values(mcpConnections)) {
       for (const tool of status.tools) {
         risks.set(tool.name, mcpToolRisk(tool));
       }
     }
     return risks;
-  }, [mcpConnections]);
+  }, [activeBuiltinTools, mcpConnections]);
 
   useEffect(() => {
     let isMounted = true;
@@ -276,11 +283,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (activeArtifact && activeArtifact.id !== lastOpenedArtifactId.current) {
+    if (latestArtifact && latestArtifact.id !== lastOpenedArtifactId.current) {
       setIsCanvasOpen(true);
     }
-    lastOpenedArtifactId.current = activeArtifact?.id ?? null;
-  }, [activeArtifact]);
+    lastOpenedArtifactId.current = latestArtifact?.id ?? null;
+  }, [latestArtifact]);
 
   const handleAppSettingsChange = (nextSettings: AppSettings) => {
     setAppSettings(nextSettings);
@@ -290,7 +297,7 @@ export default function App() {
   const saveConversationSnapshot = async (
     conversation: Conversation,
     runEvents = runState.events,
-    artifacts = activeArtifact ? [activeArtifact] : [],
+    artifacts = collectConversationArtifacts(conversation),
   ) => {
     await conversationRepository.saveConversation({
       conversation,
@@ -305,50 +312,20 @@ export default function App() {
 
   const createActiveProvider = async (): Promise<ChatProvider | null> => {
     const compatibleConfigs = providerConfigs.filter((config) => config.type === "openai-compatible");
-    const selectedCompatibleConfig =
-      compatibleConfigs.find(matchesActiveModel) ??
-      (activeConversation.model === "openai-compatible-placeholder" && compatibleConfigs.length === 1
+    const placeholderConfig =
+      activeConversation.model === "openai-compatible-placeholder" && compatibleConfigs.length === 1
         ? compatibleConfigs[0]
-        : undefined);
+        : undefined;
+    const selectedConfig = providerConfigs.find(matchesActiveModel) ?? placeholderConfig;
 
-    if (selectedCompatibleConfig?.baseUrl) {
-      const apiKey = await providerConfigRepository.getProviderApiKey(selectedCompatibleConfig.id);
-      return createOpenAICompatibleProvider({
-        baseUrl: selectedCompatibleConfig.baseUrl,
-        apiKey: apiKey ?? undefined,
+    if (selectedConfig) {
+      const apiKey = await providerConfigRepository.getProviderApiKey(selectedConfig.id);
+      return createProviderFromConfig(selectedConfig, {
+        apiKey,
         model:
           activeConversation.model === "openai-compatible-placeholder"
-            ? selectedCompatibleConfig.defaultModelId
-            : activeConversation.model || selectedCompatibleConfig.defaultModelId,
-      });
-    }
-
-    const selectedOpenAIConfig = providerConfigs
-      .filter((config) => config.type === "openai")
-      .find(matchesActiveModel);
-
-    if (selectedOpenAIConfig) {
-      const apiKey = await providerConfigRepository.getProviderApiKey(selectedOpenAIConfig.id);
-      if (!apiKey) {
-        return null;
-      }
-
-      return createOpenAIProvider({
-        apiKey,
-        model: activeConversation.model || selectedOpenAIConfig.defaultModelId,
-      });
-    }
-
-    const selectedOllamaConfig = providerConfigs
-      .filter((config) => config.type === "ollama")
-      .find(matchesActiveModel);
-
-    if (selectedOllamaConfig) {
-      const apiKey = await providerConfigRepository.getProviderApiKey(selectedOllamaConfig.id);
-      return createOllamaProvider({
-        baseUrl: selectedOllamaConfig.baseUrl,
-        apiKey: apiKey ?? undefined,
-        model: activeConversation.model || selectedOllamaConfig.defaultModelId,
+            ? selectedConfig.defaultModelId
+            : activeConversation.model,
       });
     }
 
@@ -367,6 +344,24 @@ export default function App() {
   };
 
   const executeTool = async (toolCall: ToolCallEvent): Promise<{ content: string; isError: boolean }> => {
+    const builtinTool = activeBuiltinTools.find((tool) => tool.name === toolCall.toolName);
+    if (builtinTool) {
+      let parsedArguments: Record<string, unknown> = {};
+      try {
+        parsedArguments = toolCall.arguments ? (JSON.parse(toolCall.arguments) as Record<string, unknown>) : {};
+      } catch {
+        parsedArguments = {};
+      }
+      try {
+        return await builtinTool.execute(parsedArguments);
+      } catch (error) {
+        return {
+          content: error instanceof Error ? error.message : `Could not run built-in tool '${toolCall.toolName}'.`,
+          isError: true,
+        };
+      }
+    }
+
     const route = toolRoute.get(toolCall.toolName);
     if (!route) {
       return { content: `Tool '${toolCall.toolName}' is not currently available.`, isError: true };
@@ -404,11 +399,11 @@ export default function App() {
     });
   };
 
-  const handleNewChat = () => {
+  const handleNewChat = (projectName?: string) => {
     const preferredModel = availableModels.length
       ? pickPreferredModel(availableModels, appSettings.lastModelId)
       : undefined;
-    const conversation = createBlankConversation(preferredModel);
+    const conversation = createBlankConversation(preferredModel, projectName);
 
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
@@ -418,8 +413,8 @@ export default function App() {
     });
   };
 
-  const handleSend = async (content: string) => {
-    if (!content.trim() || isRunning) {
+  const handleSend = async (content: string, attachments?: MessageAttachment[]) => {
+    if ((!content.trim() && !attachments?.length) || isRunning) {
       return;
     }
 
@@ -428,14 +423,16 @@ export default function App() {
       role: "user",
       content,
       createdAt: new Date().toISOString(),
+      ...(attachments?.length ? { attachments } : {}),
     };
+    const titleFromContent = content.trim().slice(0, 48) || attachments?.[0]?.name || "New chat";
 
     setConversations((current) =>
       current.map((conversation) =>
         conversation.id === activeConversation.id
           ? {
               ...conversation,
-              title: conversation.title === "New chat" ? content.slice(0, 48) : conversation.title,
+              title: conversation.title === "New chat" ? titleFromContent : conversation.title,
               updatedAt: new Date().toISOString(),
               messages: [...conversation.messages, userMessage],
             }
@@ -452,7 +449,7 @@ export default function App() {
       const setupMessage = createSetupMessage(localModels.find((model) => model.id === activeConversation.model));
       const completedConversation: Conversation = {
         ...activeConversation,
-        title: activeConversation.title === "New chat" ? content.slice(0, 48) : activeConversation.title,
+        title: activeConversation.title === "New chat" ? titleFromContent : activeConversation.title,
         updatedAt: new Date().toISOString(),
         messages: [...activeConversation.messages, userMessage, setupMessage],
       };
@@ -484,7 +481,7 @@ export default function App() {
 
     const completedConversation: Conversation = {
       ...activeConversation,
-      title: activeConversation.title === "New chat" ? content.slice(0, 48) : activeConversation.title,
+      title: activeConversation.title === "New chat" ? titleFromContent : activeConversation.title,
       updatedAt: new Date().toISOString(),
       messages: [...activeConversation.messages, userMessage, runResult.message],
     };
@@ -492,8 +489,7 @@ export default function App() {
     setConversations((current) =>
       current.map((conversation) => (conversation.id === activeConversation.id ? completedConversation : conversation)),
     );
-    const completedArtifact = createArtifactFromMessage(runResult.message);
-    saveConversationSnapshot(completedConversation, runResult.events, completedArtifact ? [completedArtifact] : []).catch((error: unknown) => {
+    saveConversationSnapshot(completedConversation, runResult.events).catch((error: unknown) => {
       console.error("Could not save completed conversation", error);
     });
     setIsRunning(false);
@@ -553,6 +549,33 @@ export default function App() {
     });
   };
 
+  const handleToggleArchive = (id: string) => {
+    const target = conversations.find((conversation) => conversation.id === id);
+    if (!target) {
+      return;
+    }
+
+    const updated: Conversation = { ...target, isArchived: !target.isArchived };
+    setConversations((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
+    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
+      console.error("Could not save archive state", error);
+    });
+  };
+
+  const handleSetConversationProject = (id: string, projectName: string) => {
+    const trimmed = projectName.trim();
+    const target = conversations.find((conversation) => conversation.id === id);
+    if (!target || !trimmed || target.projectName === trimmed) {
+      return;
+    }
+
+    const updated: Conversation = { ...target, projectName: trimmed };
+    setConversations((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
+    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
+      console.error("Could not save project assignment", error);
+    });
+  };
+
   const handleRenameConversation = (id: string, title: string) => {
     const trimmed = title.trim();
     if (!trimmed) {
@@ -599,7 +622,9 @@ export default function App() {
         onSelectConversation={setActiveConversationId}
         onDeleteConversation={handleDeleteConversation}
         onTogglePin={handleTogglePin}
+        onToggleArchive={handleToggleArchive}
         onRenameConversation={handleRenameConversation}
+        onSetConversationProject={handleSetConversationProject}
       />
       <ChatWorkspace
         conversation={activeConversation}
@@ -608,6 +633,8 @@ export default function App() {
         isCanvasOpen={isCanvasOpen}
         availableModels={availableModels}
         submitShortcut={appSettings.submitShortcut}
+        userAvatarSrc={appSettings.userAvatar ?? "/user.png"}
+        assistantAvatarSrc={appSettings.assistantAvatar ?? "/assistant.png"}
         pendingApprovalToolCall={pendingApproval?.toolCall ?? null}
         onApprovalDecision={(decision) => pendingApproval?.resolve(decision)}
         onCancelRun={handleCancelRun}
@@ -615,7 +642,7 @@ export default function App() {
         onToggleCanvas={() => setIsCanvasOpen((current) => !current)}
         onSend={handleSend}
       />
-      {isCanvasOpen ? <CanvasPanel artifact={activeArtifact} onClose={() => setIsCanvasOpen(false)} /> : null}
+      {isCanvasOpen ? <CanvasPanel groups={artifactGroups} onClose={() => setIsCanvasOpen(false)} /> : null}
       {showSettings ? (
         <SettingsPanel
           providerConfigs={providerConfigs}

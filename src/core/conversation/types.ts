@@ -18,6 +18,15 @@ export interface ToolCallEvent {
   result?: string;
 }
 
+export interface MessageAttachment {
+  id: string;
+  kind: "image" | "text";
+  name: string;
+  mimeType: string;
+  /** Base64 payload for images; plain text content for text documents. */
+  data: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -26,6 +35,7 @@ export interface ChatMessage {
   toolCalls?: ToolCallEvent[];
   /** For role: "tool" messages, links this result back to the tool call it answers. */
   toolCallId?: string;
+  attachments?: MessageAttachment[];
 }
 
 export interface Conversation {
@@ -36,6 +46,7 @@ export interface Conversation {
   model: string;
   processing: ProcessingLocation;
   isPinned: boolean;
+  isArchived?: boolean;
   updatedAt: string;
   messages: ChatMessage[];
 }

@@ -1,4 +1,26 @@
-import type { ChatMessage } from "../conversation/types";
+import type { ChatMessage, MessageAttachment } from "../conversation/types";
+
+type OpenAIContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+function attachmentToContentParts(attachment: MessageAttachment): OpenAIContentPart[] {
+  if (attachment.kind === "image") {
+    return [
+      {
+        type: "image_url",
+        image_url: { url: `data:${attachment.mimeType};base64,${attachment.data}` },
+      },
+    ];
+  }
+
+  return [
+    {
+      type: "text",
+      text: `Attached file "${attachment.name}":\n\n${attachment.data}`,
+    },
+  ];
+}
 
 /**
  * Converts a conversation's messages to OpenAI wire format. An assistant message only
@@ -42,6 +64,16 @@ export function toOpenAIWireMessages(messages: ChatMessage[]): Record<string, un
         role: "tool",
         tool_call_id: message.toolCallId ?? "",
         content: message.content,
+      };
+    }
+
+    if (message.attachments?.length) {
+      return {
+        role: message.role,
+        content: [
+          ...message.attachments.flatMap(attachmentToContentParts),
+          ...(message.content ? [{ type: "text", text: message.content } satisfies OpenAIContentPart] : []),
+        ],
       };
     }
 

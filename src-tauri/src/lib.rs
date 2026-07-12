@@ -153,6 +153,22 @@ fn get_local_runtime_status(app: AppHandle) -> serde_json::Value {
 }
 
 #[tauri::command]
+fn write_binary_file(path: String, contents_base64: String) -> Result<(), String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(contents_base64)
+        .map_err(|error| format!("Could not decode file contents: {error}"))?;
+    std::fs::write(&path, bytes).map_err(|error| format!("Could not write {path}: {error}"))
+}
+
+#[tauri::command]
+fn read_binary_file(path: String) -> Result<String, String> {
+    use base64::Engine;
+    let bytes = std::fs::read(&path).map_err(|error| format!("Could not read {path}: {error}"))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+#[tauri::command]
 fn save_mcp_server(app: AppHandle, config: mcp_client::McpServerConfig) -> Result<(), String> {
     let value = serde_json::to_value(&config).map_err(|error| format!("Could not encode MCP server config: {error}"))?;
     storage_for_app(&app)?
@@ -228,6 +244,8 @@ pub fn run() {
             start_local_runtime,
             stop_local_runtime,
             get_local_runtime_status,
+            write_binary_file,
+            read_binary_file,
             save_mcp_server,
             load_mcp_servers,
             remove_mcp_server,
