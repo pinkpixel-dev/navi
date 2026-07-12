@@ -1,5 +1,17 @@
 import { PointerEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Archive, ChevronLeft, ChevronRight, Code2, Copy, Download, Eye, FileText, PanelRightClose } from "lucide-react";
+import {
+  Archive,
+  ChevronLeft,
+  ChevronRight,
+  Code2,
+  Copy,
+  Download,
+  Eye,
+  FileText,
+  Maximize2,
+  Minimize2,
+  PanelRightClose,
+} from "lucide-react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import mermaid from "mermaid";
@@ -10,7 +22,9 @@ mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" 
 
 interface CanvasPanelProps {
   groups: ArtifactGroup[];
+  isExpanded: boolean;
   onResizeStart: (event: PointerEvent<HTMLDivElement>) => void;
+  onToggleExpanded: () => void;
   onClose: () => void;
 }
 
@@ -109,7 +123,7 @@ function ArtifactPreview({ artifact }: { artifact: Artifact }) {
   }
 }
 
-export function CanvasPanel({ groups, onResizeStart, onClose }: CanvasPanelProps) {
+export function CanvasPanel({ groups, isExpanded, onResizeStart, onToggleExpanded, onClose }: CanvasPanelProps) {
   const [selectedGroupKey, setSelectedGroupKey] = useState<string | null>(null);
   const [revisionIndexByGroup, setRevisionIndexByGroup] = useState<Record<string, number>>({});
   const [view, setView] = useState<"preview" | "raw">("preview");
@@ -226,6 +240,14 @@ export function CanvasPanel({ groups, onResizeStart, onClose }: CanvasPanelProps
               </button>
             </>
           ) : null}
+          <button
+            type="button"
+            aria-label={isExpanded ? "Restore canvas size" : "Expand canvas"}
+            title={isExpanded ? "Restore canvas size" : "Expand canvas"}
+            onClick={onToggleExpanded}
+          >
+            {isExpanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
           <button type="button" aria-label="Close canvas" onClick={onClose}>
             <PanelRightClose size={15} />
           </button>

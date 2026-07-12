@@ -151,6 +151,7 @@ export default function App() {
   const [runState, dispatchRunState] = useReducer(chatRunReducer, undefined, createInitialChatRunState);
   const [activeRunController, setActiveRunController] = useState<AbortController | null>(null);
   const [isCanvasOpen, setIsCanvasOpen] = useState(false);
+  const [isCanvasExpanded, setIsCanvasExpanded] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => Number(localStorage.getItem(sidebarWidthStorageKey)) || 280);
   const [canvasWidth, setCanvasWidth] = useState(() => Number(localStorage.getItem(canvasWidthStorageKey)) || 520);
   const [providerConfigs, setProviderConfigs] = useState<ProviderConfig[]>([]);
@@ -322,10 +323,12 @@ export default function App() {
 
   const handleCanvasResizeStart = (event: PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
+    setIsCanvasExpanded(false);
     const startX = event.clientX;
     const startWidth = canvasWidth;
     const handlePointerMove = (moveEvent: globalThis.PointerEvent) => {
-      setCanvasWidth(Math.min(900, Math.max(340, startWidth - (moveEvent.clientX - startX))));
+      const maxCanvasWidth = Math.max(340, window.innerWidth - sidebarWidth - 280);
+      setCanvasWidth(Math.min(maxCanvasWidth, Math.max(340, startWidth - (moveEvent.clientX - startX))));
     };
     const handlePointerUp = () => {
       window.removeEventListener("pointermove", handlePointerMove);
@@ -650,9 +653,16 @@ export default function App() {
     "--sidebar-width": `${sidebarWidth}px`,
     "--canvas-width": `${canvasWidth}px`,
   } as CSSProperties;
+  const shellClassName = [
+    "app-shell",
+    isCanvasOpen ? null : "canvas-collapsed",
+    isCanvasOpen && isCanvasExpanded ? "canvas-expanded" : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <main className={isCanvasOpen ? "app-shell" : "app-shell canvas-collapsed"} style={layoutStyle}>
+    <main className={shellClassName} style={layoutStyle}>
       <Sidebar
         activeConversationId={activeConversation.id}
         conversations={conversations}
@@ -682,7 +692,16 @@ export default function App() {
         onSend={handleSend}
       />
       {isCanvasOpen ? (
-        <CanvasPanel groups={artifactGroups} onResizeStart={handleCanvasResizeStart} onClose={() => setIsCanvasOpen(false)} />
+        <CanvasPanel
+          groups={artifactGroups}
+          isExpanded={isCanvasExpanded}
+          onResizeStart={handleCanvasResizeStart}
+          onToggleExpanded={() => setIsCanvasExpanded((current) => !current)}
+          onClose={() => {
+            setIsCanvasExpanded(false);
+            setIsCanvasOpen(false);
+          }}
+        />
       ) : null}
       {showSettings ? (
         <SettingsPanel

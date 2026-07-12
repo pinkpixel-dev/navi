@@ -41,7 +41,7 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: var(--sidebar-width, 280px) minmax(420px, 1fr) minmax(340px, var(--canvas-width, 520px));
+  grid-template-columns: var(--sidebar-width, 280px) minmax(280px, 1fr) minmax(340px, var(--canvas-width, 520px));
   grid-template-rows: minmax(0, 1fr);
   height: 100vh;
   overflow: hidden;
@@ -49,7 +49,17 @@ button {
 }
 
 .app-shell.canvas-collapsed {
-  grid-template-columns: var(--sidebar-width, 280px) minmax(420px, 1fr);
+  grid-template-columns: var(--sidebar-width, 280px) minmax(280px, 1fr);
+}
+
+.app-shell.canvas-expanded {
+  grid-template-columns: var(--sidebar-width, 280px) 0 minmax(0, 1fr);
+}
+
+.app-shell.canvas-expanded .chat-workspace {
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .sidebar,
