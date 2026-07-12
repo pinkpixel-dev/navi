@@ -106,10 +106,9 @@ export function ChatWorkspace({
   return (
     <section className="chat-workspace">
       <header className="workspace-header">
-        <div>
+        <div className="workspace-heading">
           <h1>{conversation.title}</h1>
           <div className="workspace-meta">
-            <span>{conversation.projectName}</span>
             <select
               aria-label="Active provider"
               value={effectiveProvider}

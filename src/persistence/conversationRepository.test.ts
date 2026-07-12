@@ -48,4 +48,21 @@ describe("conversation repository", () => {
     expect(snapshots[0].conversation.title).toBe("Second chat");
     expect(snapshots[1].conversation).toEqual(conversation);
   });
+
+  test("deletes a conversation snapshot through its driver", async () => {
+    const repository = createConversationRepository(createMemoryPersistenceDriver());
+
+    await repository.saveConversation({ conversation, runEvents: [], artifacts: [] });
+    await repository.saveConversation({
+      conversation: { ...conversation, id: "chat-2", title: "Second chat" },
+      runEvents: [],
+      artifacts: [],
+    });
+
+    await repository.deleteConversation("chat-1");
+
+    const snapshots = await repository.loadConversations();
+    expect(snapshots).toHaveLength(1);
+    expect(snapshots[0].conversation.id).toBe("chat-2");
+  });
 });

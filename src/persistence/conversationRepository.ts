@@ -12,17 +12,24 @@ export interface ConversationSnapshot {
 export interface PersistenceDriver {
   loadConversationSnapshots: () => Promise<ConversationSnapshot[]>;
   saveConversationSnapshot: (snapshot: ConversationSnapshot) => Promise<void>;
+  deleteConversationSnapshot: (id: string) => Promise<void>;
+  updateConversationMetadata: (conversation: Conversation) => Promise<void>;
 }
 
 export interface ConversationRepository {
   loadConversations: () => Promise<ConversationSnapshot[]>;
   saveConversation: (snapshot: ConversationSnapshot) => Promise<void>;
+  deleteConversation: (id: string) => Promise<void>;
+  /** Updates title/pin/etc. for a conversation without touching its stored run history. */
+  updateConversationMetadata: (conversation: Conversation) => Promise<void>;
 }
 
 export function createConversationRepository(driver: PersistenceDriver): ConversationRepository {
   return {
     loadConversations: () => driver.loadConversationSnapshots(),
     saveConversation: (snapshot) => driver.saveConversationSnapshot(snapshot),
+    deleteConversation: (id) => driver.deleteConversationSnapshot(id),
+    updateConversationMetadata: (conversation) => driver.updateConversationMetadata(conversation),
   };
 }
 
@@ -39,6 +46,14 @@ export function createMemoryPersistenceDriver(): PersistenceDriver {
         ...snapshots.filter((currentSnapshot) => currentSnapshot.conversation.id !== snapshot.conversation.id),
       ];
     },
+    async deleteConversationSnapshot(id) {
+      snapshots = snapshots.filter((currentSnapshot) => currentSnapshot.conversation.id !== id);
+    },
+    async updateConversationMetadata(conversation) {
+      snapshots = snapshots.map((currentSnapshot) =>
+        currentSnapshot.conversation.id === conversation.id ? { ...currentSnapshot, conversation } : currentSnapshot,
+      );
+    },
   };
 }
 
@@ -46,6 +61,8 @@ export function createTauriPersistenceDriver(): PersistenceDriver {
   return {
     loadConversationSnapshots: () => invoke<ConversationSnapshot[]>("load_conversation_snapshots"),
     saveConversationSnapshot: (snapshot) => invoke<void>("save_conversation_snapshot", { snapshot }),
+    deleteConversationSnapshot: (id) => invoke<void>("delete_conversation", { id }),
+    updateConversationMetadata: (conversation) => invoke<void>("update_conversation_metadata", { conversation }),
   };
 }
 

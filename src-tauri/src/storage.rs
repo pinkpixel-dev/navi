@@ -227,6 +227,47 @@ impl NaviStorage {
         Ok(snapshots)
     }
 
+    pub fn delete_conversation(&self, id: &str) -> rusqlite::Result<()> {
+        self.conn.execute("DELETE FROM conversations WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Updates only the `conversations` row (title/pin/etc.) for an existing conversation,
+    /// leaving `messages`/`tool_calls`/`run_events`/`artifacts` untouched. Use this instead of
+    /// `save_conversation_snapshot` when the caller doesn't have that conversation's real
+    /// run events/artifacts on hand (e.g. renaming or pinning a conversation that isn't the
+    /// active one) — reusing `save_conversation_snapshot` there would wipe its real history.
+    pub fn update_conversation_metadata(&self, conversation: &Value) -> rusqlite::Result<()> {
+        let conversation_id = string_at(conversation, "id");
+
+        self.conn.execute(
+            "
+            UPDATE conversations SET
+                title = ?2,
+                project_name = ?3,
+                provider = ?4,
+                model = ?5,
+                processing = ?6,
+                is_pinned = ?7,
+                updated_at = ?8,
+                payload_json = ?9
+            WHERE id = ?1
+            ",
+            params![
+                conversation_id,
+                string_at(conversation, "title"),
+                string_at(conversation, "projectName"),
+                string_at(conversation, "provider"),
+                string_at(conversation, "model"),
+                string_at(conversation, "processing"),
+                bool_at(conversation, "isPinned") as i64,
+                string_at(conversation, "updatedAt"),
+                conversation.to_string(),
+            ],
+        )?;
+        Ok(())
+    }
+
     pub fn save_provider_config(&self, config: &Value) -> rusqlite::Result<()> {
         let mut safe_config = config.clone();
         if let Some(object) = safe_config.as_object_mut() {
@@ -591,6 +632,61 @@ mod tests {
         assert_eq!(snapshots[0].artifacts.len(), 1);
         assert_eq!(storage.count_rows("messages").unwrap(), 2);
         assert_eq!(storage.count_rows("tool_calls").unwrap(), 1);
+    }
+
+    #[test]
+    fn deletes_a_conversation_and_cascades() {
+        let storage = NaviStorage::open_in_memory().expect("storage should open");
+
+        storage
+            .save_conversation_snapshot(&snapshot())
+            .expect("snapshot should save");
+
+        assert_eq!(storage.count_rows("messages").unwrap(), 2);
+        assert_eq!(storage.count_rows("tool_calls").unwrap(), 1);
+        assert_eq!(storage.count_rows("run_events").unwrap(), 1);
+        assert_eq!(storage.count_rows("artifacts").unwrap(), 1);
+
+        storage
+            .delete_conversation("chat-1")
+            .expect("conversation should delete");
+
+        let snapshots = storage
+            .load_conversation_snapshots()
+            .expect("snapshots should load");
+        assert_eq!(snapshots.len(), 0);
+        assert_eq!(storage.count_rows("messages").unwrap(), 0);
+        assert_eq!(storage.count_rows("tool_calls").unwrap(), 0);
+        assert_eq!(storage.count_rows("run_events").unwrap(), 0);
+        assert_eq!(storage.count_rows("artifacts").unwrap(), 0);
+    }
+
+    #[test]
+    fn updates_conversation_metadata_without_touching_run_history() {
+        let storage = NaviStorage::open_in_memory().expect("storage should open");
+
+        storage
+            .save_conversation_snapshot(&snapshot())
+            .expect("snapshot should save");
+
+        let mut renamed = snapshot().conversation;
+        renamed["title"] = serde_json::json!("Renamed chat");
+        renamed["isPinned"] = serde_json::json!(false);
+
+        storage
+            .update_conversation_metadata(&renamed)
+            .expect("metadata should update");
+
+        let snapshots = storage
+            .load_conversation_snapshots()
+            .expect("snapshots should load");
+
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].conversation["title"], "Renamed chat");
+        assert_eq!(snapshots[0].conversation["isPinned"], false);
+        assert_eq!(snapshots[0].run_events.len(), 1);
+        assert_eq!(snapshots[0].artifacts.len(), 1);
+        assert_eq!(storage.count_rows("messages").unwrap(), 2);
     }
 
     #[test]

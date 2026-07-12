@@ -18,6 +18,7 @@ import {
   type McpTransport,
 } from "../core/mcp/mcpServer";
 import type { AppSettings, SubmitShortcut } from "../core/settings/appSettings";
+import { confirmDestructiveAction } from "./confirmDialog";
 
 interface SettingsPanelProps {
   providerConfigs: ProviderConfig[];
@@ -292,7 +293,7 @@ export function SettingsPanel({
     try {
       const alreadyDownloaded = await llamaRuntimeDriver.isRuntimeDownloaded(appSettings.customLlamaServerPath);
       if (!alreadyDownloaded) {
-        const confirmed = window.confirm("Download the llama.cpp runtime (~80MB)? This only happens once.");
+        const confirmed = await confirmDestructiveAction("Download the llama.cpp runtime (~80MB)? This only happens once.");
         if (!confirmed) {
           return;
         }

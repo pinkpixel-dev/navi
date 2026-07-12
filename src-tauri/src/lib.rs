@@ -36,6 +36,20 @@ fn load_conversation_snapshots(app: AppHandle) -> Result<Vec<ConversationSnapsho
 }
 
 #[tauri::command]
+fn delete_conversation(app: AppHandle, id: String) -> Result<(), String> {
+    storage_for_app(&app)?
+        .delete_conversation(&id)
+        .map_err(|error| format!("Could not delete conversation: {error}"))
+}
+
+#[tauri::command]
+fn update_conversation_metadata(app: AppHandle, conversation: serde_json::Value) -> Result<(), String> {
+    storage_for_app(&app)?
+        .update_conversation_metadata(&conversation)
+        .map_err(|error| format!("Could not update conversation: {error}"))
+}
+
+#[tauri::command]
 fn save_provider_config(app: AppHandle, config: serde_json::Value) -> Result<(), String> {
     storage_for_app(&app)?
         .save_provider_config(&config)
@@ -200,6 +214,8 @@ pub fn run() {
             app_status,
             save_conversation_snapshot,
             load_conversation_snapshots,
+            delete_conversation,
+            update_conversation_metadata,
             save_provider_config,
             load_provider_configs,
             save_provider_api_key,

@@ -3,6 +3,7 @@ import { CanvasPanel } from "./ui/CanvasPanel";
 import { ChatWorkspace } from "./ui/ChatWorkspace";
 import { Sidebar } from "./ui/Sidebar";
 import { SettingsPanel } from "./ui/SettingsPanel";
+import { confirmDestructiveAction } from "./ui/confirmDialog";
 import { seedConversations } from "./core/conversation/seed";
 import type { Conversation, ChatMessage, ToolCallEvent } from "./core/conversation/types";
 import { runAgentLoop } from "./core/agent-loop/agentLoop";
@@ -96,7 +97,7 @@ function createBlankConversation(model?: ProviderModel): Conversation {
     model: model?.id ?? "",
     processing: model?.location === "cloud" ? "cloud" : model?.location === "local" ? "local" : "external",
     isPinned: false,
-    updatedAt: "Just now",
+    updatedAt: new Date().toISOString(),
     messages: [],
   };
 }
@@ -434,8 +435,8 @@ export default function App() {
         conversation.id === activeConversation.id
           ? {
               ...conversation,
-              title: conversation.title === "Untitled chat" ? content.slice(0, 48) : conversation.title,
-              updatedAt: "Just now",
+              title: conversation.title === "New chat" ? content.slice(0, 48) : conversation.title,
+              updatedAt: new Date().toISOString(),
               messages: [...conversation.messages, userMessage],
             }
           : conversation,
@@ -451,7 +452,8 @@ export default function App() {
       const setupMessage = createSetupMessage(localModels.find((model) => model.id === activeConversation.model));
       const completedConversation: Conversation = {
         ...activeConversation,
-        updatedAt: "Just now",
+        title: activeConversation.title === "New chat" ? content.slice(0, 48) : activeConversation.title,
+        updatedAt: new Date().toISOString(),
         messages: [...activeConversation.messages, userMessage, setupMessage],
       };
 
@@ -482,8 +484,8 @@ export default function App() {
 
     const completedConversation: Conversation = {
       ...activeConversation,
-      title: activeConversation.title === "Untitled chat" ? content.slice(0, 48) : activeConversation.title,
-      updatedAt: "Just now",
+      title: activeConversation.title === "New chat" ? content.slice(0, 48) : activeConversation.title,
+      updatedAt: new Date().toISOString(),
       messages: [...activeConversation.messages, userMessage, runResult.message],
     };
 
@@ -502,13 +504,80 @@ export default function App() {
     activeRunController?.abort();
   };
 
+  const handleDeleteConversation = async (id: string) => {
+    const target = conversations.find((conversation) => conversation.id === id);
+    if (!target) {
+      return;
+    }
+
+    const confirmed = await confirmDestructiveAction(`Delete "${target.title}"? This can't be undone.`);
+    if (!confirmed) {
+      return;
+    }
+
+    const remaining = conversations.filter((conversation) => conversation.id !== id);
+
+    if (remaining.length === 0) {
+      const preferredModel = availableModels.length
+        ? pickPreferredModel(availableModels, appSettings.lastModelId)
+        : undefined;
+      const replacement = createBlankConversation(preferredModel);
+      setConversations([replacement]);
+      setActiveConversationId(replacement.id);
+      saveConversationSnapshot(replacement, [], []).catch((error: unknown) => {
+        console.error("Could not save replacement conversation", error);
+      });
+    } else {
+      setConversations(remaining);
+      if (id === activeConversationId) {
+        setActiveConversationId(remaining[0].id);
+      }
+    }
+
+    conversationApprovals.current.delete(id);
+    conversationRepository.deleteConversation(id).catch((error: unknown) => {
+      console.error("Could not delete conversation", error);
+    });
+  };
+
+  const handleTogglePin = (id: string) => {
+    const target = conversations.find((conversation) => conversation.id === id);
+    if (!target) {
+      return;
+    }
+
+    const updated: Conversation = { ...target, isPinned: !target.isPinned, updatedAt: new Date().toISOString() };
+    setConversations((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
+    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
+      console.error("Could not save pin state", error);
+    });
+  };
+
+  const handleRenameConversation = (id: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const target = conversations.find((conversation) => conversation.id === id);
+    if (!target || target.title === trimmed) {
+      return;
+    }
+
+    const updated: Conversation = { ...target, title: trimmed };
+    setConversations((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
+    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
+      console.error("Could not save renamed conversation", error);
+    });
+  };
+
   const handleModelChange = (model: ProviderModel) => {
     const updatedConversation: Conversation = {
       ...activeConversation,
       provider: model.provider,
       model: model.id,
       processing: model.location === "cloud" ? "cloud" : model.location === "local" ? "local" : "external",
-      updatedAt: "Just now",
+      updatedAt: new Date().toISOString(),
     };
 
     setConversations((current) =>
@@ -528,6 +597,9 @@ export default function App() {
         onNewChat={handleNewChat}
         onOpenSettings={() => setShowSettings(true)}
         onSelectConversation={setActiveConversationId}
+        onDeleteConversation={handleDeleteConversation}
+        onTogglePin={handleTogglePin}
+        onRenameConversation={handleRenameConversation}
       />
       <ChatWorkspace
         conversation={activeConversation}
