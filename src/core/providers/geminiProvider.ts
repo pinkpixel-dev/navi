@@ -4,6 +4,7 @@ import type { ChatProvider, ProviderCompleteInput, ProviderModel, ProviderRespon
 type Fetcher = typeof fetch;
 
 const DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
+const nonChatModelNameParts = ["image", "omni", "veo", "video"];
 
 interface GeminiProviderConfig {
   apiKey: string;
@@ -69,6 +70,11 @@ interface GeminiStreamChunk {
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
+}
+
+function isChatModelName(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return !nonChatModelNameParts.some((part) => normalized.includes(part));
 }
 
 function toolCallRisk(toolName: string): ToolCallEvent["risk"] {
@@ -224,13 +230,24 @@ function stepToFunctionCall(step: GeminiStreamStep): { id?: string; name: string
   };
 }
 
+function capabilitiesForGeminiModel(modelId: string): ProviderModel["capabilities"] {
+  const normalized = modelId.toLowerCase();
+  const isVideoModel = normalized.includes("omni") || normalized.includes("veo") || normalized.includes("video");
+
+  if (isVideoModel) {
+    return ["structured-output", "canvas"];
+  }
+
+  return ["tools", "vision", "structured-output", "canvas"];
+}
+
 function createProviderModel(config: GeminiProviderConfig): ProviderModel {
   return {
     id: config.model,
     name: config.model,
     provider: "Gemini",
     location: "external",
-    capabilities: ["tools", "vision", "structured-output", "canvas"],
+    capabilities: capabilitiesForGeminiModel(config.model),
     contextTokens: 1000000,
   };
 }
@@ -258,6 +275,7 @@ export function createGeminiProvider(config: GeminiProviderConfig): ChatProvider
       return (payload.models ?? [])
         .filter((modelPayload) => modelPayload.supportedGenerationMethods?.includes("generateContent") ?? true)
         .filter((modelPayload) => Boolean(modelPayload.name))
+        .filter((modelPayload) => isChatModelName(modelPayload.name ?? ""))
         .map((modelPayload) => {
           const id = (modelPayload.name ?? "").replace(/^models\//, "");
           return {
@@ -265,7 +283,7 @@ export function createGeminiProvider(config: GeminiProviderConfig): ChatProvider
             name: modelPayload.displayName ?? id,
             provider: "Gemini",
             location: "external" as const,
-            capabilities: ["tools", "vision", "structured-output", "canvas"] as ProviderModel["capabilities"],
+            capabilities: capabilitiesForGeminiModel(id),
             contextTokens: modelPayload.inputTokenLimit ?? 1000000,
           };
         });

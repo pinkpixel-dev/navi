@@ -5,6 +5,18 @@ import type { ChatProvider, ProviderCompleteInput, ProviderModel, ProviderRespon
 type Fetcher = typeof fetch;
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+const nonChatModelNameParts = [
+  "embedding",
+  "whisper",
+  "tts",
+  "moderation",
+  "search",
+  "transcribe",
+  "image",
+  "audio",
+  "realtime",
+  "sora",
+];
 
 interface OpenAIProviderConfig {
   apiKey: string;
@@ -21,6 +33,11 @@ interface OpenAIModelsResponse {
 
 function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
+}
+
+function isChatModelName(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return !nonChatModelNameParts.some((part) => normalized.includes(part));
 }
 
 function toolCallRisk(toolName: string): ToolCallEvent["risk"] {
@@ -87,6 +104,7 @@ export function createOpenAIProvider(config: OpenAIProviderConfig): ChatProvider
       const payload = (await response.json()) as OpenAIModelsResponse;
       return (payload.data ?? [])
         .filter((modelPayload) => Boolean(modelPayload.id))
+        .filter((modelPayload) => isChatModelName(modelPayload.id ?? ""))
         .map((modelPayload) => ({
           id: modelPayload.id ?? "",
           name: modelPayload.id ?? "",

@@ -184,6 +184,21 @@ describe("gemini provider", () => {
               displayName: "Embedding 001",
               supportedGenerationMethods: ["embedContent"],
             },
+            {
+              name: "models/gemini-image-flash",
+              displayName: "Gemini Image Flash",
+              supportedGenerationMethods: ["generateContent"],
+            },
+            {
+              name: "models/gemini-omni-flash-preview",
+              displayName: "Gemini Omni Flash Preview",
+              supportedGenerationMethods: ["generateContent"],
+            },
+            {
+              name: "models/veo-3-fast-generate-preview",
+              displayName: "Veo 3 Fast Generate Preview",
+              supportedGenerationMethods: ["generateContent"],
+            },
           ],
         }),
         { status: 200 },
@@ -196,5 +211,28 @@ describe("gemini provider", () => {
     expect(models?.map((model) => model.id)).toEqual(["gemini-2.5-pro"]);
     expect(models?.[0].name).toBe("Gemini 2.5 Pro");
     expect(models?.[0].contextTokens).toBe(1048576);
+  });
+
+  test("does not advertise tool calling for a manually selected Gemini video model", async () => {
+    const fetcher = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          models: [
+            {
+              name: "models/gemini-2.5-flash",
+              displayName: "Gemini 2.5 Flash",
+              supportedGenerationMethods: ["generateContent"],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    const provider = createGeminiProvider({ apiKey: "test-key", model: "gemini-omni-flash-preview", fetcher });
+
+    const models = await provider.listModels?.();
+
+    expect(provider.model.capabilities).not.toContain("tools");
+    expect(models?.map((model) => model.id)).toEqual(["gemini-2.5-flash"]);
   });
 });

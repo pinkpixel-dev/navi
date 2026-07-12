@@ -217,6 +217,7 @@ button {
   align-items: center;
   gap: 2px;
   min-height: 32px;
+  overflow: hidden;
   border-radius: 6px;
   color: #c6cedb;
 }
@@ -253,6 +254,9 @@ button {
   flex-shrink: 0;
   color: #c8ced8;
   font-size: 11px;
+  transition:
+    opacity 0.1s ease,
+    width 0.1s ease;
 }
 
 .chat-row.active,
@@ -269,12 +273,20 @@ button {
   position: absolute;
   right: 2px;
   top: 50%;
+  z-index: 2;
   transform: translateY(-50%);
   display: flex;
   gap: 2px;
+  padding-left: 8px;
+  background: linear-gradient(90deg, rgb(15 16 18 / 0), #0f1012 18px);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.1s ease;
+}
+
+.chat-row.active .chat-row-actions,
+.chat-row:hover .chat-row-actions {
+  background: linear-gradient(90deg, rgb(22 35 37 / 0), #162325 18px);
 }
 
 .chat-row:hover .chat-row-actions,
@@ -286,6 +298,13 @@ button {
 .chat-row:hover .chat-row-select,
 .chat-row:focus-within .chat-row-select {
   padding-right: 108px;
+}
+
+.chat-row:hover .chat-row-select small,
+.chat-row:focus-within .chat-row-select small {
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
 }
 
 .chat-row-actions button {

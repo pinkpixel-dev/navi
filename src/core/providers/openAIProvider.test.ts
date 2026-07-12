@@ -193,7 +193,20 @@ describe("openAI provider", () => {
     const fetcher = vi.fn(async () =>
       new Response(
         JSON.stringify({
-          data: [{ id: "gpt-4o-mini" }, { id: "gpt-4o" }],
+          data: [
+            { id: "gpt-4o-mini" },
+            { id: "gpt-4o" },
+            { id: "text-embedding-3-small" },
+            { id: "whisper-1" },
+            { id: "tts-1" },
+            { id: "omni-moderation-latest" },
+            { id: "gpt-4o-search-preview" },
+            { id: "gpt-4o-transcribe" },
+            { id: "gpt-image-1" },
+            { id: "gpt-4o-audio-preview" },
+            { id: "gpt-4o-realtime-preview" },
+            { id: "sora-2" },
+          ],
         }),
         { status: 200 },
       ),

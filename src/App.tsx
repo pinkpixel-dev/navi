@@ -179,6 +179,10 @@ export default function App() {
     ],
     [providerConfigs, localModels],
   );
+  const activeModel = useMemo(
+    () => availableModels.find((model) => model.id === activeConversation.model),
+    [activeConversation.model, availableModels],
+  );
 
   const toolRoute = useMemo(() => {
     const route = new Map<string, { serverId: string; serverName: string }>();
@@ -507,6 +511,7 @@ export default function App() {
       return;
     }
 
+    const providerTools = activeModel?.capabilities.includes("tools") ? availableTools : [];
     const runResult = await runAgentLoop({
       conversation: activeConversation,
       input: content,
@@ -515,7 +520,7 @@ export default function App() {
       retry: {
         maxAttempts: 2,
       },
-      tools: availableTools.length ? availableTools : undefined,
+      tools: providerTools.length ? providerTools : undefined,
       executeTool,
       requestApproval,
       providerComplete: (providerInput) => completeWithToolRiskOverrides(activeProvider, providerInput, toolRiskByName),

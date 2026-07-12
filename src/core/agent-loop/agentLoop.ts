@@ -35,6 +35,8 @@ const internalAssistantMessages = new Set([
   "The run timed out before the provider responded.",
   "The run stopped because the model step limit was reached.",
 ]);
+const defaultSystemPrompt =
+  "Answer the user's latest message directly. Use earlier messages and attachments only as context when they are relevant or when the user asks about them. Do not summarize or answer earlier attachments unless the latest message asks for that.";
 
 function isInternalFailureMessage(content: string): boolean {
   return content.startsWith("The provider request failed");
@@ -79,6 +81,15 @@ function createUserMessage(content: string, attachments?: MessageAttachment[]): 
   };
 }
 
+function createSystemMessage(): ChatMessage {
+  return {
+    id: "navi-system-latest-message",
+    role: "system",
+    createdAt: createTimestamp(),
+    content: defaultSystemPrompt,
+  };
+}
+
 function createToolResultMessage(toolCallId: string, content: string): ChatMessage {
   return {
     id: crypto.randomUUID(),
@@ -102,7 +113,7 @@ function isProviderContextMessage(message: ChatMessage): boolean {
 }
 
 function createProviderMessages(conversation: Conversation, input: string, attachments?: MessageAttachment[]): ChatMessage[] {
-  return [...conversation.messages.filter(isProviderContextMessage), createUserMessage(input, attachments)];
+  return [createSystemMessage(), ...conversation.messages.filter(isProviderContextMessage), createUserMessage(input, attachments)];
 }
 
 async function runWithControls<T>(operation: () => Promise<T>, signal?: AbortSignal, timeoutMs?: number): Promise<T> {
