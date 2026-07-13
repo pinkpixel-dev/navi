@@ -6,6 +6,7 @@ import { SettingsPanel } from "./ui/SettingsPanel";
 import { confirmDestructiveAction } from "./ui/confirmDialog";
 import { seedConversations } from "./core/conversation/seed";
 import type { Conversation, ChatMessage, MessageAttachment, ToolCallEvent } from "./core/conversation/types";
+import { generateConversationTitle } from "./core/conversation/conversationTitle";
 import { presetForServerId } from "./core/tools/mcpToolPresets";
 import { runAgentLoop } from "./core/agent-loop/agentLoop";
 import type { ApprovalDecision, RunEvent } from "./core/agent-loop/types";
@@ -162,6 +163,7 @@ export default function App() {
   const [mcpConnections, setMcpConnections] = useState<Record<string, McpServerStatus>>({});
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const lastOpenedArtifactId = useRef<string | null>(null);
+  const conversationsRef = useRef(conversations);
   const conversationApprovals = useRef<Map<string, Set<string>>>(new Map());
 
   const activeConversation = useMemo(
@@ -217,6 +219,10 @@ export default function App() {
   }, [mcpConnections]);
 
   useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
+
+  useEffect(() => {
     let isMounted = true;
 
     conversationRepository
@@ -227,6 +233,7 @@ export default function App() {
         }
 
         const savedConversations = snapshots.map((snapshot) => snapshot.conversation);
+        conversationsRef.current = savedConversations;
         setConversations(savedConversations);
         setActiveConversationId(savedConversations[0].id);
       })
@@ -362,6 +369,30 @@ export default function App() {
     });
   };
 
+  const updateConversationList = (updater: (current: Conversation[]) => Conversation[]): Conversation[] => {
+    const nextConversations = updater(conversationsRef.current);
+    conversationsRef.current = nextConversations;
+    setConversations(nextConversations);
+    return nextConversations;
+  };
+
+  const applyGeneratedConversationTitle = async (
+    conversationId: string,
+    provisionalTitle: string,
+    title: string,
+  ) => {
+    const target = conversationsRef.current.find((conversation) => conversation.id === conversationId);
+    if (!target || (target.title !== "New chat" && target.title !== provisionalTitle)) {
+      return;
+    }
+
+    const updatedConversation: Conversation = { ...target, title };
+    updateConversationList((current) => current.map((conversation) =>
+      conversation.id === conversationId ? updatedConversation : conversation,
+    ));
+    await conversationRepository.updateConversationMetadata(updatedConversation);
+  };
+
   const matchesActiveModel = (config: ProviderConfig) =>
     config.defaultModelId === activeConversation.model ||
     createModelsForProviderConfig(config).some((model) => model.id === activeConversation.model);
@@ -443,7 +474,7 @@ export default function App() {
       : undefined;
     const conversation = createBlankConversation(preferredModel, projectName);
 
-    setConversations((current) => [conversation, ...current]);
+    updateConversationList((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
     dispatchRunState({ type: "reset" });
     saveConversationSnapshot(conversation, [], []).catch((error: unknown) => {
@@ -465,7 +496,7 @@ export default function App() {
     };
     const titleFromContent = content.trim().slice(0, 48) || attachments?.[0]?.name || "New chat";
 
-    setConversations((current) =>
+    updateConversationList((current) =>
       current.map((conversation) =>
         conversation.id === activeConversation.id
           ? {
@@ -492,7 +523,7 @@ export default function App() {
         messages: [...activeConversation.messages, userMessage, setupMessage],
       };
 
-      setConversations((current) =>
+      updateConversationList((current) =>
         current.map((conversation) => (conversation.id === activeConversation.id ? completedConversation : conversation)),
       );
       saveConversationSnapshot(completedConversation, [], []).catch((error: unknown) => {
@@ -526,7 +557,7 @@ export default function App() {
       messages: [...activeConversation.messages, userMessage, runResult.message],
     };
 
-    setConversations((current) =>
+    updateConversationList((current) =>
       current.map((conversation) => (conversation.id === activeConversation.id ? completedConversation : conversation)),
     );
     saveConversationSnapshot(completedConversation, runResult.events).catch((error: unknown) => {
@@ -534,6 +565,20 @@ export default function App() {
     });
     setIsRunning(false);
     setActiveRunController(null);
+
+    if (runResult.status === "completed") {
+      generateConversationTitle(activeProvider.complete, userMessage, runResult.message)
+        .then((title) => {
+          if (!title) {
+            return;
+          }
+
+          return applyGeneratedConversationTitle(completedConversation.id, titleFromContent, title);
+        })
+        .catch((error: unknown) => {
+          console.error("Could not generate conversation title", error);
+        });
+    }
   };
 
   const handleCancelRun = () => {
@@ -558,13 +603,13 @@ export default function App() {
         ? pickPreferredModel(availableModels, appSettings.lastModelId)
         : undefined;
       const replacement = createBlankConversation(preferredModel);
-      setConversations([replacement]);
+      updateConversationList(() => [replacement]);
       setActiveConversationId(replacement.id);
       saveConversationSnapshot(replacement, [], []).catch((error: unknown) => {
         console.error("Could not save replacement conversation", error);
       });
     } else {
-      setConversations(remaining);
+      updateConversationList(() => remaining);
       if (id === activeConversationId) {
         setActiveConversationId(remaining[0].id);
       }
@@ -583,7 +628,7 @@ export default function App() {
     }
 
     const updated: Conversation = { ...target, isPinned: !target.isPinned, updatedAt: new Date().toISOString() };
-    setConversations((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
+    updateConversationList((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
     conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
       console.error("Could not save pin state", error);
     });
@@ -596,7 +641,7 @@ export default function App() {
     }
 
     const updated: Conversation = { ...target, isArchived: !target.isArchived };
-    setConversations((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
+    updateConversationList((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
     conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
       console.error("Could not save archive state", error);
     });
@@ -614,7 +659,7 @@ export default function App() {
     }
 
     const updated: Conversation = { ...target, title: trimmed };
-    setConversations((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
+    updateConversationList((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
     conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
       console.error("Could not save renamed conversation", error);
     });
@@ -629,7 +674,7 @@ export default function App() {
       updatedAt: new Date().toISOString(),
     };
 
-    setConversations((current) =>
+    updateConversationList((current) =>
       current.map((conversation) => (conversation.id === activeConversation.id ? updatedConversation : conversation)),
     );
     saveConversationSnapshot(updatedConversation).catch((error: unknown) => {
