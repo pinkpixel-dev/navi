@@ -306,8 +306,7 @@ export function CanvasPanel({ groups, isExpanded, onResizeStart, onToggleExpande
       ) : (
         <div className="empty-canvas">
           <FileText size={28} />
-          <h3>Artifacts will open here</h3>
-          <p>Markdown, code, HTML, SVG, Mermaid, and image previews will live in this split view.</p>
+          <h3>Artifacts open here</h3>
         </div>
       )}
     </aside>
