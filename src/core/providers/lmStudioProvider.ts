@@ -1,5 +1,6 @@
 import type { ChatMessage, ToolCallEvent } from "../conversation/types";
 import { streamOpenAIChatCompletion, toOpenAIWireMessages, type StreamedToolCall } from "./openAIChatStream";
+import { createTauriLocalFetch, shouldUseTauriLocalFetch } from "./tauriLocalFetch";
 import type { ChatProvider, ProviderCompleteInput, ProviderModel, ProviderResponse } from "./types";
 
 type Fetcher = typeof fetch;
@@ -64,8 +65,8 @@ function createProviderModel(config: LmStudioProviderConfig): ProviderModel {
 }
 
 export function createLmStudioProvider(config: LmStudioProviderConfig): ChatProvider {
-  const fetcher = config.fetcher ?? fetch;
   const baseUrl = normalizeBaseUrl(config.baseUrl ?? DEFAULT_BASE_URL);
+  const fetcher = config.fetcher ?? (shouldUseTauriLocalFetch(baseUrl) ? createTauriLocalFetch() : fetch);
   const model = createProviderModel(config);
   const authHeaders: Record<string, string> = config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {};
 

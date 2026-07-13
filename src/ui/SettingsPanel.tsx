@@ -304,8 +304,12 @@ export function SettingsPanel({
   };
 
   const handleProviderTypeChange = (nextType: ProviderType) => {
+    const currentBaseUrl = draftProvider.baseUrl?.trim();
+    const currentDefaultBaseUrl = defaultBaseUrlForType(draftProvider.type);
     const nextBaseUrl = providerTypesWithBaseUrl.has(nextType)
-      ? draftProvider.baseUrl || defaultBaseUrlForType(nextType)
+      ? !currentBaseUrl || currentBaseUrl === currentDefaultBaseUrl
+        ? defaultBaseUrlForType(nextType)
+        : currentBaseUrl
       : undefined;
     const nextName =
       !draftProvider.name.trim() || isDefaultProviderName(draftProvider.name)

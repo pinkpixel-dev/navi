@@ -4,12 +4,36 @@ mod llama_runtime;
 mod mcp_client;
 mod storage;
 
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use storage::{ConversationSnapshot, NaviStorage};
 use tauri::{AppHandle, Manager};
 
 #[tauri::command]
 fn app_status() -> &'static str {
     "Navi desktop shell is ready."
+}
+
+#[derive(Debug, Deserialize)]
+struct LocalHttpRequest {
+    url: String,
+    method: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LocalHttpResponse {
+    status: u16,
+    body: String,
+}
+
+fn is_loopback_http_url(url: &reqwest::Url) -> bool {
+    url.scheme() == "http"
+        && matches!(
+            url.host_str(),
+            Some("localhost") | Some("127.0.0.1") | Some("::1")
+        )
 }
 
 fn storage_for_app(app: &AppHandle) -> Result<NaviStorage, String> {
@@ -19,6 +43,44 @@ fn storage_for_app(app: &AppHandle) -> Result<NaviStorage, String> {
         .map_err(|error| format!("Could not locate app data directory: {error}"))?;
     NaviStorage::open(data_dir.join("navi.sqlite"))
         .map_err(|error| format!("Could not open Navi database: {error}"))
+}
+
+#[tauri::command]
+async fn local_http_request(request: LocalHttpRequest) -> Result<LocalHttpResponse, String> {
+    let url =
+        reqwest::Url::parse(&request.url).map_err(|error| format!("Invalid local URL: {error}"))?;
+    if !is_loopback_http_url(&url) {
+        return Err("Only loopback HTTP URLs are allowed for local provider requests.".to_string());
+    }
+
+    let method = request
+        .method
+        .as_deref()
+        .unwrap_or("GET")
+        .parse::<reqwest::Method>()
+        .map_err(|error| format!("Invalid local request method: {error}"))?;
+    let client = reqwest::Client::new();
+    let mut builder = client.request(method, url);
+
+    for (name, value) in request.headers.unwrap_or_default() {
+        builder = builder.header(name, value);
+    }
+
+    if let Some(body) = request.body {
+        builder = builder.body(body);
+    }
+
+    let response = builder
+        .send()
+        .await
+        .map_err(|error| format!("Local provider request failed: {error}"))?;
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format!("Could not read local provider response: {error}"))?;
+
+    Ok(LocalHttpResponse { status, body })
 }
 
 #[tauri::command]
@@ -237,6 +299,7 @@ pub fn run() {
         .manage(mcp_client::McpManagerState::default())
         .invoke_handler(tauri::generate_handler![
             app_status,
+            local_http_request,
             save_conversation_snapshot,
             load_conversation_snapshots,
             delete_conversation,
