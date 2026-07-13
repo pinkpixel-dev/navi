@@ -4,6 +4,39 @@ Navi is a local-first chat app and MCP client built with Tauri, React, and TypeS
 
 See `ROADMAP.md` for what's built and what's next.
 
+## Install
+
+The recommended install path is the native desktop app from GitHub Releases.
+
+1. Open the latest release on GitHub.
+2. Download the installer for your platform:
+   - Linux: `.AppImage`, `.deb`, or `.rpm`
+   - Windows: `.exe`
+3. Download the matching checksum file from the same release.
+4. Verify the file before installing:
+
+```bash
+./scripts/verify-install.sh <installer file>
+```
+
+You can also verify manually with:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+On Windows, compare `Get-FileHash .\Navi_1.0.0_x64-setup.exe` with the matching line in `SHA256SUMS-windows.txt`.
+
+### Optional Docker preview
+
+Docker is available as an extra way to try the browser frontend. It is not the recommended install because it does not run the native Tauri desktop shell. Features that need desktop APIs, like OS keyring storage, native file dialogs, and managed local model runtime controls, are limited or unavailable in this mode.
+
+```bash
+docker run --rm -p 8080:8080 pinkpixel/navi:1.0.0
+```
+
+Then open `http://localhost:8080`.
+
 ## What works right now
 
 - **Chat with real providers.** OpenAI, Anthropic, Google Gemini, OpenRouter, OpenAI-compatible endpoints (vLLM, custom servers), Ollama, and LM Studio are all wired up, with responses streaming in token by token instead of appearing all at once.
@@ -75,6 +108,6 @@ or the manual `sha256sum -c SHA256SUMS --ignore-missing`.
 
 ## Project direction
 
-`PLAN.md` is the full product plan. `ROADMAP.md` tracks what's actually been built. Phases 0 through 5 are done — chat, local models, MCP tool use, the artifact canvas, projects, hosted provider adapters, personalization, and theme controls all work end to end.
+`PLAN.md` is the full product plan. `ROADMAP.md` tracks what's actually been built. Phases 0 through 6 are done for the first release, with Windows packaging handled by the manual GitHub Actions workflow.
 
 Made with love by Pink Pixel.

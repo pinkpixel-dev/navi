@@ -1,7 +1,7 @@
 {
   "name": "navi",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "A local-first MCP chat app for local and hosted models.",
   "scripts": {
@@ -10,7 +10,10 @@
     "test": "vitest",
     "test:run": "vitest run",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "bundle:linux": "NO_STRIP=true tauri build",
+    "checksums": "./scripts/generate-checksums.sh",
+    "docker:build": "docker build -t pinkpixel/navi:1.0.0 -t pinkpixel/navi:latest ."
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

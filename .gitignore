@@ -9,6 +9,7 @@ src-tauri/gen
 .claude/
 .codex/
 
+docs/
 CHANGELOG.md
 ERRORS.md
 MEMORY.md

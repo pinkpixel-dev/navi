@@ -1,0 +1,15 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+.git
+.github
+.agents
+.claude
+.codex
+*.log
+Dockerfile
+docker-compose*.yml
+docker-compose*.yaml
+SHA256SUMS
+
