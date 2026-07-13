@@ -12,8 +12,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "bundle:linux": "NO_STRIP=true tauri build && ./scripts/fix-appimage-tls.sh",
-    "checksums": "./scripts/generate-checksums.sh",
-    "docker:build": "docker build -t pinkpixel/navi:1.0.0 -t pinkpixel/navi:latest ."
+    "checksums": "./scripts/generate-checksums.sh"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
