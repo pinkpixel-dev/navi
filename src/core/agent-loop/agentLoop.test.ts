@@ -272,6 +272,54 @@ describe("runAgentLoop", () => {
     expect(result.message.content).toBe("Provider answered.");
   });
 
+  test("adds saved user instructions and profile details to provider system context", async () => {
+    let capturedInput: ProviderCompleteInput | undefined;
+    const complete = vi.fn(async (input: ProviderCompleteInput) => {
+      capturedInput = input;
+      return createTextResponse("Personalized answer.");
+    });
+
+    await runAgentLoop({
+      conversation: testConversation,
+      input: "What should I work on?",
+      userInstructions: "Use concise, practical guidance.",
+      userProfile: {
+        name: "Jessica",
+        bio: "A developer building polished local AI tools.",
+      },
+      providerComplete: complete,
+    });
+
+    const systemMessage = capturedInput?.messages.find((message) => message.role === "system");
+    expect(systemMessage?.content).toContain("Answer the user's latest message directly.");
+    expect(systemMessage?.content).toContain("User name: Jessica");
+    expect(systemMessage?.content).toContain("User bio: A developer building polished local AI tools.");
+    expect(systemMessage?.content).toContain("Additional user instructions: Use concise, practical guidance.");
+  });
+
+  test("ignores blank personalization fields when creating provider system context", async () => {
+    let capturedInput: ProviderCompleteInput | undefined;
+
+    await runAgentLoop({
+      conversation: testConversation,
+      input: "hello",
+      userInstructions: "   ",
+      userProfile: {
+        name: "",
+        bio: "   ",
+      },
+      providerComplete: async (input: ProviderCompleteInput) => {
+        capturedInput = input;
+        return createTextResponse("Hello.");
+      },
+    });
+
+    const systemMessage = capturedInput?.messages.find((message) => message.role === "system");
+    expect(systemMessage?.content).not.toContain("User name:");
+    expect(systemMessage?.content).not.toContain("User bio:");
+    expect(systemMessage?.content).not.toContain("Additional user instructions:");
+  });
+
   test("passes attachments through to provider completion", async () => {
     let capturedInput: ProviderCompleteInput | undefined;
     const complete = vi.fn(async (input: ProviderCompleteInput) => {

@@ -539,6 +539,11 @@ export default function App() {
       conversation: activeConversation,
       input: content,
       attachments,
+      userInstructions: appSettings.userInstructions,
+      userProfile: {
+        name: appSettings.userName,
+        bio: appSettings.userBio,
+      },
       signal: controller.signal,
       retry: {
         maxAttempts: 2,
@@ -716,6 +721,7 @@ export default function App() {
         isCanvasOpen={isCanvasOpen}
         availableModels={availableModels}
         submitShortcut={appSettings.submitShortcut}
+        userDisplayName={appSettings.userName}
         userAvatarSrc={appSettings.userAvatar ?? "/user.png"}
         assistantAvatarSrc={appSettings.assistantAvatar ?? "/assistant.png"}
         pendingApprovalToolCall={pendingApproval?.toolCall ?? null}

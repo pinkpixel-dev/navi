@@ -825,6 +825,35 @@ export function SettingsPanel({
               </select>
             </label>
           </div>
+          <div className="settings-form settings-personalization">
+            <h3>Personalization</h3>
+            <label>
+              <span>Name</span>
+              <input
+                value={appSettings.userName ?? ""}
+                onChange={(event) => onAppSettingsChange({ ...appSettings, userName: event.target.value })}
+                placeholder="Used in the new chat screen and model context"
+              />
+            </label>
+            <label>
+              <span>Short bio</span>
+              <textarea
+                value={appSettings.userBio ?? ""}
+                onChange={(event) => onAppSettingsChange({ ...appSettings, userBio: event.target.value })}
+                placeholder="A tiny bit of context about you"
+                rows={3}
+              />
+            </label>
+            <label>
+              <span>Custom instructions</span>
+              <textarea
+                value={appSettings.userInstructions ?? ""}
+                onChange={(event) => onAppSettingsChange({ ...appSettings, userInstructions: event.target.value })}
+                placeholder="How Navi should respond across chats"
+                rows={4}
+              />
+            </label>
+          </div>
           <div className="settings-form settings-avatars">
             <h3>Avatars</h3>
             <p className="settings-note">Shown next to messages. PNG, JPEG, GIF, or WebP.</p>

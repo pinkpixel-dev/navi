@@ -13,6 +13,7 @@ interface ChatWorkspaceProps {
   isCanvasOpen: boolean;
   availableModels: ProviderModel[];
   submitShortcut: SubmitShortcut;
+  userDisplayName?: string;
   userAvatarSrc: string;
   assistantAvatarSrc: string;
   pendingApprovalToolCall: ToolCallEvent | null;
@@ -125,6 +126,7 @@ export function ChatWorkspace({
   isCanvasOpen,
   availableModels,
   submitShortcut,
+  userDisplayName,
   userAvatarSrc,
   assistantAvatarSrc,
   pendingApprovalToolCall,
@@ -167,6 +169,9 @@ export function ChatWorkspace({
     () => availableModels.filter((model) => model.provider === effectiveProvider),
     [availableModels, effectiveProvider],
   );
+  const emptyChatHeading = userDisplayName?.trim()
+    ? `Ready when you are, ${userDisplayName.trim()}.`
+    : "Ready when you are.";
 
   const handleProviderChange = (providerName: string) => {
     setSelectedProvider(providerName);
@@ -302,7 +307,7 @@ export function ChatWorkspace({
       <div className="message-list">
         {!conversation.messages.length && !isRunning ? (
           <div className="empty-chat" role="status">
-            <h2>Ready when you are.</h2>
+            <h2>{emptyChatHeading}</h2>
             <p>{availableModels.length ? "Start a new conversation." : "Add a provider in Settings to start chatting."}</p>
           </div>
         ) : (

@@ -1143,9 +1143,16 @@ button {
 }
 
 .settings-form input,
-.settings-form select {
+.settings-form select,
+.settings-form textarea {
   width: 100%;
   padding: 0 10px;
+}
+
+.settings-form textarea {
+  min-height: 84px;
+  padding: 10px;
+  resize: vertical;
 }
 
 .settings-actions {

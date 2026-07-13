@@ -8,10 +8,17 @@ interface ToolExecutionResult {
   isError: boolean;
 }
 
+interface UserProfileContext {
+  name?: string;
+  bio?: string;
+}
+
 interface RunAgentLoopInput {
   conversation: Conversation;
   input: string;
   attachments?: MessageAttachment[];
+  userInstructions?: string;
+  userProfile?: UserProfileContext;
   approvalPolicy?: ApprovalPolicy;
   limits?: RunLimits;
   retry?: RunRetryPolicy;
@@ -81,12 +88,31 @@ function createUserMessage(content: string, attachments?: MessageAttachment[]): 
   };
 }
 
-function createSystemMessage(): ChatMessage {
+function createSystemPrompt(userInstructions?: string, userProfile?: UserProfileContext): string {
+  const contextLines: string[] = [];
+  const name = userProfile?.name?.trim();
+  const bio = userProfile?.bio?.trim();
+  const instructions = userInstructions?.trim();
+
+  if (name) {
+    contextLines.push(`User name: ${name}`);
+  }
+  if (bio) {
+    contextLines.push(`User bio: ${bio}`);
+  }
+  if (instructions) {
+    contextLines.push(`Additional user instructions: ${instructions}`);
+  }
+
+  return contextLines.length ? `${defaultSystemPrompt}\n\n${contextLines.join("\n")}` : defaultSystemPrompt;
+}
+
+function createSystemMessage(userInstructions?: string, userProfile?: UserProfileContext): ChatMessage {
   return {
     id: "navi-system-latest-message",
     role: "system",
     createdAt: createTimestamp(),
-    content: defaultSystemPrompt,
+    content: createSystemPrompt(userInstructions, userProfile),
   };
 }
 
@@ -112,8 +138,18 @@ function isProviderContextMessage(message: ChatMessage): boolean {
   return true;
 }
 
-function createProviderMessages(conversation: Conversation, input: string, attachments?: MessageAttachment[]): ChatMessage[] {
-  return [createSystemMessage(), ...conversation.messages.filter(isProviderContextMessage), createUserMessage(input, attachments)];
+function createProviderMessages(
+  conversation: Conversation,
+  input: string,
+  attachments?: MessageAttachment[],
+  userInstructions?: string,
+  userProfile?: UserProfileContext,
+): ChatMessage[] {
+  return [
+    createSystemMessage(userInstructions, userProfile),
+    ...conversation.messages.filter(isProviderContextMessage),
+    createUserMessage(input, attachments),
+  ];
 }
 
 async function runWithControls<T>(operation: () => Promise<T>, signal?: AbortSignal, timeoutMs?: number): Promise<T> {
@@ -165,6 +201,8 @@ export async function runAgentLoop({
   conversation,
   input,
   attachments,
+  userInstructions,
+  userProfile,
   approvalPolicy = "allow-all",
   limits = defaultLimits,
   retry = { maxAttempts: 1 },
@@ -207,7 +245,7 @@ export async function runAgentLoop({
     };
   }
 
-  const workingMessages = createProviderMessages(conversation, input, attachments);
+  const workingMessages = createProviderMessages(conversation, input, attachments, userInstructions, userProfile);
   const seedLength = workingMessages.length;
   const allToolCalls: ToolCallEvent[] = [];
   let totalToolCallCount = 0;

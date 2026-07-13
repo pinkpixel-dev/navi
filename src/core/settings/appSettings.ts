@@ -3,6 +3,9 @@ export type SubmitShortcut = "enter" | "shift-enter";
 export interface AppSettings {
   submitShortcut: SubmitShortcut;
   lastModelId?: string;
+  userName?: string;
+  userBio?: string;
+  userInstructions?: string;
   customLlamaServerPath?: string;
   localRuntimeAcceleration?: "auto" | "cpu" | "cuda" | "vulkan" | "rocm" | "sycl";
   localRuntimeGpuLayers?: number;
