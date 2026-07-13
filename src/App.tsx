@@ -6,7 +6,7 @@ import { SettingsPanel } from "./ui/SettingsPanel";
 import { confirmDestructiveAction } from "./ui/confirmDialog";
 import { seedConversations } from "./core/conversation/seed";
 import type { Conversation, ChatMessage, MessageAttachment, ToolCallEvent } from "./core/conversation/types";
-import { builtinToolSchema, enabledBuiltinTools } from "./core/tools/builtinTools";
+import { presetForServerId } from "./core/tools/mcpToolPresets";
 import { runAgentLoop } from "./core/agent-loop/agentLoop";
 import type { ApprovalDecision, RunEvent } from "./core/agent-loop/types";
 import { chatRunReducer, createInitialChatRunState } from "./core/chat-state/chatRunReducer";
@@ -196,33 +196,25 @@ export default function App() {
     return route;
   }, [mcpConnections, mcpServers]);
 
-  const activeBuiltinTools = useMemo(
-    () => enabledBuiltinTools(appSettings.enabledBuiltinTools),
-    [appSettings.enabledBuiltinTools],
-  );
-
   const availableTools = useMemo<ProviderToolSchema[]>(() => {
-    const tools: ProviderToolSchema[] = activeBuiltinTools.map(builtinToolSchema);
+    const tools: ProviderToolSchema[] = [];
     for (const status of Object.values(mcpConnections)) {
       for (const tool of status.tools) {
         tools.push(toProviderToolSchema(tool));
       }
     }
     return tools;
-  }, [activeBuiltinTools, mcpConnections]);
+  }, [mcpConnections]);
 
   const toolRiskByName = useMemo(() => {
     const risks = new Map<string, ToolCallEvent["risk"]>();
-    for (const tool of activeBuiltinTools) {
-      risks.set(tool.name, tool.risk);
-    }
     for (const status of Object.values(mcpConnections)) {
       for (const tool of status.tools) {
         risks.set(tool.name, mcpToolRisk(tool));
       }
     }
     return risks;
-  }, [activeBuiltinTools, mcpConnections]);
+  }, [mcpConnections]);
 
   useEffect(() => {
     let isMounted = true;
@@ -284,7 +276,22 @@ export default function App() {
         const statuses = await Promise.all(
           servers.map(async (server) => [server.id, await mcpServerDriver.getServerStatus(server.id)] as const),
         );
-        setMcpConnections(Object.fromEntries(statuses.filter(([, status]) => status.state === "connected")));
+        const connectedStatuses = Object.fromEntries(statuses.filter(([, status]) => status.state === "connected"));
+        const enabledPresetServers = servers.filter((server) => server.enabled && presetForServerId(server.id));
+        const presetStatuses = await Promise.all(
+          enabledPresetServers.map(async (server) => {
+            try {
+              return [server.id, await mcpServerDriver.connectServer(server)] as const;
+            } catch (error) {
+              console.error(`Could not connect preset MCP server '${server.name}'`, error);
+              return null;
+            }
+          }),
+        );
+        setMcpConnections({
+          ...connectedStatuses,
+          ...Object.fromEntries(presetStatuses.filter((status): status is [string, McpServerStatus] => Boolean(status))),
+        });
       })
       .catch((error: unknown) => {
         console.error("Could not load MCP servers", error);
@@ -393,24 +400,6 @@ export default function App() {
   };
 
   const executeTool = async (toolCall: ToolCallEvent): Promise<{ content: string; isError: boolean }> => {
-    const builtinTool = activeBuiltinTools.find((tool) => tool.name === toolCall.toolName);
-    if (builtinTool) {
-      let parsedArguments: Record<string, unknown> = {};
-      try {
-        parsedArguments = toolCall.arguments ? (JSON.parse(toolCall.arguments) as Record<string, unknown>) : {};
-      } catch {
-        parsedArguments = {};
-      }
-      try {
-        return await builtinTool.execute(parsedArguments);
-      } catch (error) {
-        return {
-          content: error instanceof Error ? error.message : `Could not run built-in tool '${toolCall.toolName}'.`,
-          isError: true,
-        };
-      }
-    }
-
     const route = toolRoute.get(toolCall.toolName);
     if (!route) {
       return { content: `Tool '${toolCall.toolName}' is not currently available.`, isError: true };

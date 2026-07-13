@@ -1052,6 +1052,12 @@ button {
   margin: 0;
 }
 
+.settings-section-header p {
+  margin: 0;
+  color: #9da3ad;
+  font-size: 12px;
+}
+
 .settings-section-header button {
   display: inline-flex;
   align-items: center;
@@ -1077,12 +1083,16 @@ button {
   order: 4;
 }
 
-.settings-mcp-servers {
+.settings-mcp-presets {
   order: 5;
 }
 
-.settings-grid > .settings-form:not(.settings-local-models):not(.settings-general):not(.settings-avatars) {
+.settings-mcp-servers {
   order: 6;
+}
+
+.settings-grid > .settings-form:not(.settings-local-models):not(.settings-general):not(.settings-avatars) {
+  order: 7;
 }
 
 .settings-modal-scrim {
@@ -1236,6 +1246,85 @@ button {
   border-radius: 6px;
   color: #f7f7f5;
   background: #181a1e;
+}
+
+.settings-preset-list {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.settings-preset-card {
+  align-content: start;
+}
+
+.settings-preset-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settings-preset-card-header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.settings-toggle {
+  min-width: 48px;
+  min-height: 28px;
+  border: 1px solid #343943;
+  border-radius: 999px;
+  background: #181a1e;
+  color: #9da3ad;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.settings-toggle.active {
+  border-color: #7ce7ff;
+  color: #101114;
+  background: #7ce7ff;
+}
+
+.settings-preset-options {
+  display: grid;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.settings-preset-options label {
+  display: grid;
+  gap: 5px;
+}
+
+.settings-preset-options label span {
+  color: #9da3ad;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-preset-options input,
+.settings-preset-options select {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #262a30;
+  border-radius: 7px;
+  background: #101114;
+  color: #f7f7f5;
+}
+
+.settings-inline-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+}
+
+.settings-inline-input button {
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #262a30;
+  border-radius: 7px;
+  background: #181a1e;
+  color: #f7f7f5;
 }
 
 .settings-model-list {

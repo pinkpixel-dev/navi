@@ -1,6 +1,5 @@
-import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, KeyRound, Pencil, Play, Plug, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
-import { builtinTools, defaultEnabledBuiltinToolNames } from "../core/tools/builtinTools";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createProviderFromConfig } from "../core/providers/createProvider";
 import {
@@ -20,6 +19,15 @@ import {
   type McpServerStatus,
   type McpTransport,
 } from "../core/mcp/mcpServer";
+import {
+  buildPresetMcpServerConfig,
+  mcpToolPresets,
+  missingRequiredPresetOptions,
+  presetForServerId,
+  presetServerId,
+  valuesFromPresetServerConfig,
+  type McpToolPreset,
+} from "../core/tools/mcpToolPresets";
 import type { AppSettings, SubmitShortcut } from "../core/settings/appSettings";
 import { confirmDestructiveAction } from "./confirmDialog";
 
@@ -223,18 +231,10 @@ export function SettingsPanel({
 
   const userAvatarInputRef = useRef<HTMLInputElement>(null);
   const assistantAvatarInputRef = useRef<HTMLInputElement>(null);
+  const customMcpServers = useMemo(() => mcpServers.filter((server) => !presetForServerId(server.id)), [mcpServers]);
 
   const updateDraft = (patch: Partial<ProviderConfig>) => {
     setDraftProvider((current) => ({ ...current, ...patch }));
-  };
-
-  const enabledToolNames = appSettings.enabledBuiltinTools ?? defaultEnabledBuiltinToolNames();
-
-  const handleToggleBuiltinTool = (name: string) => {
-    const next = enabledToolNames.includes(name)
-      ? enabledToolNames.filter((toolName) => toolName !== name)
-      : [...enabledToolNames, name];
-    onAppSettingsChange({ ...appSettings, enabledBuiltinTools: next });
   };
 
   const handleAvatarUpload = (role: "user" | "assistant") => (event: ChangeEvent<HTMLInputElement>) => {
@@ -444,6 +444,76 @@ export function SettingsPanel({
     env: draftMcpServer.transport === "stdio" ? parseKeyValueLines(mcpEnvText, "=") : undefined,
     headers: draftMcpServer.transport === "http" ? parseKeyValueLines(mcpHeadersText, ":") : undefined,
   });
+
+  const getPresetServer = (preset: McpToolPreset) => mcpServers.find((server) => server.id === presetServerId(preset.id));
+
+  const savePresetServer = async (config: McpServerConfig) => {
+    await mcpServerDriver.saveServer(config);
+    onMcpServersChange([config, ...mcpServers.filter((server) => server.id !== config.id)]);
+  };
+
+  const handlePresetOptionChange = async (preset: McpToolPreset, optionKey: string, value: string) => {
+    const existingServer = getPresetServer(preset);
+    const values = { ...valuesFromPresetServerConfig(preset, existingServer), [optionKey]: value };
+    const config = buildPresetMcpServerConfig(preset.id, values, existingServer?.enabled ?? false);
+    await savePresetServer(config);
+
+    if (config.enabled && mcpConnections[config.id]?.state === "connected") {
+      await mcpServerDriver.disconnectServer(config.id).catch(() => {});
+      const nextConnections = { ...mcpConnections };
+      delete nextConnections[config.id];
+      onMcpConnectionsChange(nextConnections);
+      setMcpStatus(`${preset.name} settings saved. Toggle it back on to reconnect.`);
+      return;
+    }
+
+    setMcpStatus(`${preset.name} settings saved.`);
+  };
+
+  const handleChoosePresetPath = async (preset: McpToolPreset, optionKey: string, type: "directory" | "file") => {
+    const selected = await open({
+      directory: type === "directory",
+      multiple: false,
+    });
+    if (typeof selected === "string") {
+      await handlePresetOptionChange(preset, optionKey, selected);
+    }
+  };
+
+  const handleTogglePreset = async (preset: McpToolPreset) => {
+    const existingServer = getPresetServer(preset);
+    const values = valuesFromPresetServerConfig(preset, existingServer);
+    const shouldEnable = !existingServer?.enabled;
+    const missingOptions = shouldEnable ? missingRequiredPresetOptions(preset.id, values) : [];
+
+    if (missingOptions.length) {
+      setMcpStatus(`Add the required ${preset.name} option${missingOptions.length === 1 ? "" : "s"} before turning it on.`);
+      return;
+    }
+
+    const config = buildPresetMcpServerConfig(preset.id, values, shouldEnable);
+    await savePresetServer(config);
+
+    if (!shouldEnable) {
+      await mcpServerDriver.disconnectServer(config.id).catch(() => {});
+      const nextConnections = { ...mcpConnections };
+      delete nextConnections[config.id];
+      onMcpConnectionsChange(nextConnections);
+      setMcpStatus(`${preset.name} turned off.`);
+      return;
+    }
+
+    setMcpStatus(`Connecting to ${preset.name}...`);
+    try {
+      const result = await mcpServerDriver.connectServer(config);
+      onMcpConnectionsChange({ ...mcpConnections, [config.id]: result });
+      setMcpStatus(`${preset.name}: ${result.tools.length} tool${result.tools.length === 1 ? "" : "s"} available.`);
+    } catch (error) {
+      const disabledConfig = { ...config, enabled: false };
+      await savePresetServer(disabledConfig);
+      setMcpStatus(error instanceof Error ? error.message : `Could not connect to ${preset.name}.`);
+    }
+  };
 
   const handleTestMcpConnection = async () => {
     setMcpStatus("Testing connection...");
@@ -918,8 +988,8 @@ export function SettingsPanel({
                 </button>
               </div>
               <div className="settings-card-list">
-                {mcpServers.length ? (
-                  mcpServers.map((server) => {
+                {customMcpServers.length ? (
+                  customMcpServers.map((server) => {
                     const connection = mcpConnections[server.id];
                     const isConnected = connection?.state === "connected";
                     return (
@@ -978,11 +1048,11 @@ export function SettingsPanel({
               <label>
                 <span>Editing</span>
                 <select
-                  value={mcpServers.some((server) => server.id === draftMcpServer.id) ? draftMcpServer.id : "new"}
+                  value={customMcpServers.some((server) => server.id === draftMcpServer.id) ? draftMcpServer.id : "new"}
                   onChange={(event) => handleSelectMcpServer(event.target.value)}
                 >
                   <option value="new">New server</option>
-                  {mcpServers.map((server) => (
+                  {customMcpServers.map((server) => (
                     <option key={server.id} value={server.id}>
                       {server.name}
                     </option>
@@ -1090,26 +1160,95 @@ export function SettingsPanel({
               </div>
             ) : null
           ) : null}
-          <div className="settings-form">
-            <h3>Built-in Tools</h3>
-            <p className="settings-note">
-              These run inside Navi without an MCP server. Toggle which ones the model can call.
-            </p>
-            <div className="settings-model-list">
-              {builtinTools.map((tool) => (
-                <label className="settings-model-checkbox" key={tool.name}>
-                  <input
-                    type="checkbox"
-                    checked={enabledToolNames.includes(tool.name)}
-                    onChange={() => handleToggleBuiltinTool(tool.name)}
-                  />
-                  <span>
-                    <strong>{tool.name}</strong> — {tool.description}
-                  </span>
-                </label>
-              ))}
+          {isTauri ? (
+            <div className="settings-section settings-mcp-presets">
+              <div className="settings-section-header">
+                <h3>Navi Tools</h3>
+                <p>Curated MCP servers with simple toggles.</p>
+              </div>
+              <div className="settings-card-list settings-preset-list">
+                {mcpToolPresets.map((preset) => {
+                  const server = getPresetServer(preset);
+                  const values = valuesFromPresetServerConfig(preset, server);
+                  const isEnabled = Boolean(server?.enabled);
+                  const isConnected = mcpConnections[presetServerId(preset.id)]?.state === "connected";
+                  return (
+                    <div className="settings-card settings-preset-card" key={preset.id}>
+                      <div className="settings-preset-card-header">
+                        <div>
+                          <strong>{preset.name}</strong>
+                          <span>{isConnected ? "Connected" : isEnabled ? "Enabled" : "Off"}</span>
+                        </div>
+                        <button
+                          type="button"
+                          className={isEnabled ? "settings-toggle active" : "settings-toggle"}
+                          aria-pressed={isEnabled}
+                          onClick={() => handleTogglePreset(preset)}
+                        >
+                          {isEnabled ? "On" : "Off"}
+                        </button>
+                      </div>
+                      <span>{preset.description}</span>
+                      {preset.options.length ? (
+                        <div className="settings-preset-options">
+                          {preset.options.map((option) => (
+                            <label key={option.key}>
+                              <span>{option.label}</span>
+                              {option.type === "select" ? (
+                                <select
+                                  value={values[option.key] ?? ""}
+                                  onChange={(event) => handlePresetOptionChange(preset, option.key, event.target.value)}
+                                >
+                                  <option value="">Select...</option>
+                                  {(option.options ?? []).map((item) => (
+                                    <option key={item.value} value={item.value}>
+                                      {item.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : option.type === "directory" || option.type === "file" ? (
+                                <div className="settings-inline-input">
+                                  <input
+                                    value={values[option.key] ?? ""}
+                                    onChange={(event) => handlePresetOptionChange(preset, option.key, event.target.value)}
+                                    placeholder={option.placeholder}
+                                  />
+                                  <button
+                                    type="button"
+                                    aria-label={`Choose ${option.label}`}
+                                    onClick={() =>
+                                      handleChoosePresetPath(
+                                        preset,
+                                        option.key,
+                                        option.type === "directory" ? "directory" : "file",
+                                      )
+                                    }
+                                  >
+                                    <FolderOpen size={14} />
+                                  </button>
+                                </div>
+                              ) : (
+                                <input
+                                  type={option.type === "password" ? "password" : "text"}
+                                  value={values[option.key] ?? ""}
+                                  onChange={(event) => handlePresetOptionChange(preset, option.key, event.target.value)}
+                                  placeholder={option.placeholder}
+                                />
+                              )}
+                            </label>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="settings-note">
+                <KeyRound size={14} />
+                API keys and paths are saved in the local MCP server configuration, matching regular MCP config behavior.
+              </p>
             </div>
-          </div>
+          ) : null}
         </div>
       </section>
     </div>
