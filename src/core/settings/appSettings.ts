@@ -1,9 +1,13 @@
 import type { ProjectSettings } from "../projects/projectSettings";
 
 export type SubmitShortcut = "enter" | "shift-enter";
+export type ThemeMode = "dark" | "light";
+export type AccentColor = "blue" | "red" | "orange" | "yellow" | "green" | "purple" | "pink";
 
 export interface AppSettings {
   submitShortcut: SubmitShortcut;
+  themeMode?: ThemeMode;
+  accentColor?: AccentColor;
   lastModelId?: string;
   userName?: string;
   userBio?: string;
@@ -19,6 +23,8 @@ export interface AppSettings {
 
 export const defaultAppSettings: AppSettings = {
   submitShortcut: "enter",
+  themeMode: "dark",
+  accentColor: "blue",
 };
 
 const appSettingsStorageKey = "navi.appSettings";

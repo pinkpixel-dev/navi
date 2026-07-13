@@ -35,6 +35,8 @@ interface ChatWorkspaceProps {
   userDisplayName?: string;
   userAvatarSrc: string;
   assistantAvatarSrc: string;
+  userAvatarIsDefault: boolean;
+  assistantAvatarIsDefault: boolean;
   pendingApprovalToolCall: ToolCallEvent | null;
   onApprovalDecision: (decision: ApprovalDecision) => void;
   onCancelRun: () => void;
@@ -158,6 +160,8 @@ export function ChatWorkspace({
   userDisplayName,
   userAvatarSrc,
   assistantAvatarSrc,
+  userAvatarIsDefault,
+  assistantAvatarIsDefault,
   pendingApprovalToolCall,
   onApprovalDecision,
   onCancelRun,
@@ -288,11 +292,25 @@ export function ChatWorkspace({
     return null;
   };
 
+  const isDefaultAvatarFor = (role: string): boolean => {
+    if (role === "user") {
+      return userAvatarIsDefault;
+    }
+    if (role === "assistant") {
+      return assistantAvatarIsDefault;
+    }
+    return false;
+  };
+
   const renderRoleHeader = (role: string) => {
     const avatar = avatarFor(role);
     return avatar ? (
       <div className="message-role">
-        <img className="message-avatar" src={avatar} alt={role} />
+        <img
+          className={isDefaultAvatarFor(role) ? "message-avatar default-avatar-accent" : "message-avatar"}
+          src={avatar}
+          alt={role}
+        />
       </div>
     ) : (
       <div className="message-role">{role}</div>

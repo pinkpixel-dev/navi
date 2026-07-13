@@ -213,7 +213,7 @@ export function Sidebar({
   return (
     <aside className="sidebar">
       <div className="brand">
-        <img src="/icon.png" alt="" />
+        <img className="navi-icon-accent" src="/icon.png" alt="" />
         <div>
           <strong>Navi</strong>
         </div>

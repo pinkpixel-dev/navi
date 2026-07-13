@@ -28,7 +28,7 @@ import {
   valuesFromPresetServerConfig,
   type McpToolPreset,
 } from "../core/tools/mcpToolPresets";
-import type { AppSettings, SubmitShortcut } from "../core/settings/appSettings";
+import type { AccentColor, AppSettings, SubmitShortcut, ThemeMode } from "../core/settings/appSettings";
 import { confirmDestructiveAction } from "./confirmDialog";
 
 interface SettingsPanelProps {
@@ -146,6 +146,15 @@ function isDefaultProviderName(name: string): boolean {
 
 const providerTypesWithRequiredKey = new Set<ProviderType>(["openai", "anthropic", "gemini", "openrouter"]);
 const providerTypesWithBaseUrl = new Set<ProviderType>(["openai-compatible", "ollama", "lmstudio"]);
+const accentColorOptions: { value: AccentColor; label: string }[] = [
+  { value: "blue", label: "Blue" },
+  { value: "red", label: "Red" },
+  { value: "orange", label: "Orange" },
+  { value: "yellow", label: "Yellow" },
+  { value: "green", label: "Green" },
+  { value: "purple", label: "Purple" },
+  { value: "pink", label: "Pink" },
+];
 
 function defaultBaseUrlForType(type: ProviderType): string | undefined {
   switch (type) {
@@ -824,6 +833,39 @@ export function SettingsPanel({
                 <option value="shift-enter">Shift+Enter (Enter for a new line)</option>
               </select>
             </label>
+            <label>
+              <span>Theme</span>
+              <select
+                value={appSettings.themeMode ?? "dark"}
+                onChange={(event) =>
+                  onAppSettingsChange({
+                    ...appSettings,
+                    themeMode: event.target.value as ThemeMode,
+                  })
+                }
+              >
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </label>
+            <label>
+              <span>Accent color</span>
+              <select
+                value={appSettings.accentColor ?? "blue"}
+                onChange={(event) =>
+                  onAppSettingsChange({
+                    ...appSettings,
+                    accentColor: event.target.value as AccentColor,
+                  })
+                }
+              >
+                {accentColorOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <div className="settings-form settings-personalization">
             <h3>Personalization</h3>
@@ -858,7 +900,11 @@ export function SettingsPanel({
             <h3>Avatars</h3>
             <p className="settings-note">Shown next to messages. PNG, JPEG, GIF, or WebP.</p>
             <div className="settings-avatar-row">
-              <img className="settings-avatar" src={appSettings.userAvatar ?? "/user.png"} alt="User avatar" />
+              <img
+                className={appSettings.userAvatar ? "settings-avatar" : "settings-avatar default-avatar-accent"}
+                src={appSettings.userAvatar ?? "/user.png"}
+                alt="User avatar"
+              />
               <span>You</span>
               <input
                 ref={userAvatarInputRef}
@@ -878,7 +924,7 @@ export function SettingsPanel({
             </div>
             <div className="settings-avatar-row">
               <img
-                className="settings-avatar"
+                className={appSettings.assistantAvatar ? "settings-avatar" : "settings-avatar default-avatar-accent"}
                 src={appSettings.assistantAvatar ?? "/assistant.png"}
                 alt="Assistant avatar"
               />

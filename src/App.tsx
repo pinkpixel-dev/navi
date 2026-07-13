@@ -349,6 +349,13 @@ export default function App() {
   }, [latestArtifact]);
 
   useEffect(() => {
+    const themeMode = appSettings.themeMode ?? "dark";
+    document.documentElement.dataset.theme = themeMode;
+    document.documentElement.dataset.accent = appSettings.accentColor ?? "blue";
+    document.documentElement.style.colorScheme = themeMode;
+  }, [appSettings.themeMode, appSettings.accentColor]);
+
+  useEffect(() => {
     localStorage.setItem(sidebarWidthStorageKey, String(sidebarWidth));
   }, [sidebarWidth]);
 
@@ -906,6 +913,8 @@ export default function App() {
         userDisplayName={appSettings.userName}
         userAvatarSrc={appSettings.userAvatar ?? "/user.png"}
         assistantAvatarSrc={appSettings.assistantAvatar ?? "/assistant.png"}
+        userAvatarIsDefault={!appSettings.userAvatar}
+        assistantAvatarIsDefault={!appSettings.assistantAvatar}
         pendingApprovalToolCall={pendingApproval?.toolCall ?? null}
         onApprovalDecision={(decision) => pendingApproval?.resolve(decision)}
         onCancelRun={handleCancelRun}

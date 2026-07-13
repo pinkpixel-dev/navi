@@ -13,7 +13,7 @@ See `ROADMAP.md` for what's built and what's next.
 - **Attach files to your messages.** Images go to vision-capable models as actual images; text documents (markdown, code, CSV, JSON, and friends) get inlined so the model can read them.
 - **Run models locally, no extra installs.** Import a `.gguf` file from disk, hit Start, and Navi downloads a CPU-only `llama-server` build on first use (with a confirm prompt so it never happens silently), spawns it, and routes chat through it. If you already have `llama-server` installed somewhere, you can point Settings at it instead and skip the download.
 - **Real GGUF metadata.** Navi reads architecture, quantization, context length, and chat template straight out of the GGUF header — no separate tool needed.
-- **Organize and personalize your chats.** Delete, rename, pin, and archive conversations, group them into projects, manage chats from compact action menus in the sidebar or open chat header, and search across titles and message content. Projects live in their own sidebar section, have customizable icons/colors and instructions, and can be deleted without deleting their chats. Settings also supports custom avatars, a saved display name, a short bio, and custom instructions that get added to model context.
+- **Organize and personalize your chats.** Delete, rename, pin, and archive conversations, group them into projects, manage chats from compact action menus in the sidebar or open chat header, and search across titles and message content. Projects live in their own sidebar section, have customizable icons/colors and instructions, and can be deleted without deleting their chats. Settings also supports dark/light theme mode, accent colors, custom avatars, a saved display name, a short bio, and custom instructions that get added to model context.
 - **Everything's saved locally.** Conversations, messages, tool calls, artifacts, provider configs, and MCP servers live in SQLite. API keys go through your OS keyring, never into the database.
 
 ## Development
@@ -75,6 +75,6 @@ or the manual `sha256sum -c SHA256SUMS --ignore-missing`.
 
 ## Project direction
 
-`PLAN.md` is the full product plan. `ROADMAP.md` tracks what's actually been built. Phases 0 through 5 are done — chat, local models, MCP tool use, the artifact canvas, projects, hosted provider adapters, and release tooling all work end to end.
+`PLAN.md` is the full product plan. `ROADMAP.md` tracks what's actually been built. Phases 0 through 5 are done — chat, local models, MCP tool use, the artifact canvas, projects, hosted provider adapters, personalization, and theme controls all work end to end.
 
 Made with love by Pink Pixel.
