@@ -17,6 +17,7 @@ import DOMPurify from "dompurify";
 import mermaid from "mermaid";
 import type { Artifact, ArtifactGroup } from "../canvas/artifacts";
 import { copyArtifactSource, downloadArtifact, downloadArtifactsZip } from "../canvas/download";
+import { highlightCodeToHtml } from "../canvas/syntaxHighlight";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "strict" });
 
@@ -29,16 +30,26 @@ interface CanvasPanelProps {
 }
 
 function MarkdownView({ source }: { source: string }) {
-  const html = useMemo(() => DOMPurify.sanitize(marked.parse(source, { async: false }) as string), [source]);
+  const html = useMemo(() => {
+    const renderer = new marked.Renderer();
+    renderer.code = ({ text, lang }) => {
+      const languageClass = lang ? ` language-${lang.replace(/[^a-z0-9_-]/gi, "")}` : "";
+      return `<pre class="artifact-code"><code class="syntax-highlight${languageClass}">${highlightCodeToHtml(text, lang)}</code></pre>`;
+    };
+
+    return DOMPurify.sanitize(marked.parse(source, { async: false, renderer }) as string);
+  }, [source]);
   return <div className="artifact-body artifact-markdown" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function CodeView({ source, language }: { source: string; language?: string }) {
+  const html = useMemo(() => highlightCodeToHtml(source, language), [source, language]);
+
   return (
     <div className="artifact-body">
       {language ? <span className="artifact-language">{language}</span> : null}
       <pre className="artifact-code">
-        <code>{source}</code>
+        <code className="syntax-highlight" dangerouslySetInnerHTML={{ __html: html }} />
       </pre>
     </div>
   );
@@ -97,7 +108,7 @@ function MermaidView({ source }: { source: string }) {
       <div className="artifact-body">
         <p className="artifact-error">{error}</p>
         <pre className="artifact-code">
-          <code>{source}</code>
+          <code className="syntax-highlight" dangerouslySetInnerHTML={{ __html: highlightCodeToHtml(source, "mermaid") }} />
         </pre>
       </div>
     );

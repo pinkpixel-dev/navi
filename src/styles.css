@@ -991,6 +991,38 @@ button {
   background: transparent;
 }
 
+.syntax-highlight .syntax-keyword {
+  color: #7ce7ff;
+}
+
+.syntax-highlight .syntax-string {
+  color: #f4c481;
+}
+
+.syntax-highlight .syntax-number,
+.syntax-highlight .syntax-literal {
+  color: #b7a7ff;
+}
+
+.syntax-highlight .syntax-comment {
+  color: #707784;
+}
+
+.syntax-highlight .syntax-property,
+.syntax-highlight .syntax-heading {
+  color: #8ee6a8;
+}
+
+.syntax-highlight .syntax-tag,
+.syntax-highlight .syntax-fence,
+.syntax-highlight .syntax-list-marker {
+  color: #ff9f9f;
+}
+
+.syntax-highlight .syntax-identifier {
+  color: inherit;
+}
+
 .artifact-markdown blockquote {
   margin: 10px 0;
   padding: 4px 14px;
