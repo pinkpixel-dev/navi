@@ -1,10 +1,27 @@
 import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { FileText, Paperclip, PanelRightOpen, Send, Square, X } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  FileText,
+  MessageSquarePlus,
+  Paperclip,
+  PanelRightOpen,
+  Pencil,
+  Send,
+  SlidersHorizontal,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
 import type { Conversation, MessageAttachment, ToolCallEvent } from "../core/conversation/types";
 import type { ChatRunState } from "../core/chat-state/chatRunReducer";
 import type { ApprovalDecision } from "../core/agent-loop/types";
 import type { ProviderModel } from "../core/providers/types";
 import type { SubmitShortcut } from "../core/settings/appSettings";
+import { defaultProjectName, type ProjectSettings } from "../core/projects/projectSettings";
+import { ChatActionsMenu } from "./ChatActionsMenu";
+import { ProjectMoveMenu } from "./ProjectMoveMenu";
+import { ProjectIconMark } from "./projectVisuals";
 
 interface ChatWorkspaceProps {
   conversation: Conversation;
@@ -13,6 +30,8 @@ interface ChatWorkspaceProps {
   isCanvasOpen: boolean;
   availableModels: ProviderModel[];
   submitShortcut: SubmitShortcut;
+  projects: ProjectSettings[];
+  projectView: { project: ProjectSettings; projects: ProjectSettings[]; conversations: Conversation[] } | null;
   userDisplayName?: string;
   userAvatarSrc: string;
   assistantAvatarSrc: string;
@@ -20,6 +39,14 @@ interface ChatWorkspaceProps {
   onApprovalDecision: (decision: ApprovalDecision) => void;
   onCancelRun: () => void;
   onModelChange: (model: ProviderModel) => void;
+  onNewChatInProject: (projectName: string) => void;
+  onEditProject: (project: ProjectSettings) => void;
+  onSelectConversation: (conversationId: string) => void;
+  onMoveConversationToProject: (conversationId: string, projectName: string) => void;
+  onRenameConversation: (conversationId: string, title: string) => void;
+  onTogglePin: (conversationId: string) => void;
+  onToggleArchive: (conversationId: string) => void;
+  onDeleteConversation: (conversationId: string) => void;
   onToggleCanvas: () => void;
   onSend: (content: string, attachments?: MessageAttachment[]) => void;
 }
@@ -126,6 +153,8 @@ export function ChatWorkspace({
   isCanvasOpen,
   availableModels,
   submitShortcut,
+  projects,
+  projectView,
   userDisplayName,
   userAvatarSrc,
   assistantAvatarSrc,
@@ -133,12 +162,24 @@ export function ChatWorkspace({
   onApprovalDecision,
   onCancelRun,
   onModelChange,
+  onNewChatInProject,
+  onEditProject,
+  onSelectConversation,
+  onMoveConversationToProject,
+  onRenameConversation,
+  onTogglePin,
+  onToggleArchive,
+  onDeleteConversation,
   onToggleCanvas,
   onSend,
 }: ChatWorkspaceProps) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<MessageAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [isRenamingActiveChat, setIsRenamingActiveChat] = useState(false);
+  const [activeChatTitleDraft, setActiveChatTitleDraft] = useState(conversation.title);
+  const [editingProjectChatId, setEditingProjectChatId] = useState<string | null>(null);
+  const [projectChatTitleDraft, setProjectChatTitleDraft] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedProvider, setSelectedProvider] = useState(
     () => availableModels.find((model) => model.id === conversation.model)?.provider ?? "",
@@ -161,6 +202,8 @@ export function ChatWorkspace({
     if (activeModelProvider) {
       setSelectedProvider(activeModelProvider);
     }
+    setIsRenamingActiveChat(false);
+    setActiveChatTitleDraft(conversation.title);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversation.id]);
 
@@ -256,11 +299,62 @@ export function ChatWorkspace({
     );
   };
 
+  const commitActiveChatRename = () => {
+    if (isRenamingActiveChat) {
+      onRenameConversation(conversation.id, activeChatTitleDraft);
+    }
+    setIsRenamingActiveChat(false);
+  };
+
+  const handleActiveChatRenameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitActiveChatRename();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setIsRenamingActiveChat(false);
+    }
+  };
+
+  const startProjectChatRename = (conversation: Conversation) => {
+    setEditingProjectChatId(conversation.id);
+    setProjectChatTitleDraft(conversation.title);
+  };
+
+  const commitProjectChatRename = () => {
+    if (editingProjectChatId) {
+      onRenameConversation(editingProjectChatId, projectChatTitleDraft);
+    }
+    setEditingProjectChatId(null);
+  };
+
+  const handleProjectChatRenameKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commitProjectChatRename();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setEditingProjectChatId(null);
+    }
+  };
+
   return (
     <section className="chat-workspace">
       <header className="workspace-header">
         <div className="workspace-heading">
-          <h1>{conversation.title}</h1>
+          {isRenamingActiveChat ? (
+            <input
+              className="workspace-title-input"
+              autoFocus
+              aria-label="Rename chat"
+              value={activeChatTitleDraft}
+              onBlur={commitActiveChatRename}
+              onChange={(event) => setActiveChatTitleDraft(event.target.value)}
+              onKeyDown={handleActiveChatRenameKeyDown}
+            />
+          ) : (
+            <h1>{conversation.title}</h1>
+          )}
           <div className="workspace-meta">
             <select
               aria-label="Active provider"
@@ -295,22 +389,135 @@ export function ChatWorkspace({
             </select>
           </div>
         </div>
-        {!isCanvasOpen ? (
-          <div className="status-strip">
+        <div className="status-strip">
+          {!projectView ? (
+            <ChatActionsMenu
+              className="workspace-chat-actions"
+              conversation={conversation}
+              projectOptions={projects}
+              onStartEdit={() => {
+                setActiveChatTitleDraft(conversation.title);
+                setIsRenamingActiveChat(true);
+              }}
+              onTogglePin={() => onTogglePin(conversation.id)}
+              onToggleArchive={() => onToggleArchive(conversation.id)}
+              onDelete={() => onDeleteConversation(conversation.id)}
+              onMoveToProject={(projectName) => onMoveConversationToProject(conversation.id, projectName)}
+            />
+          ) : null}
+          {!isCanvasOpen ? (
             <button className="header-icon-button" type="button" aria-label="Open canvas" onClick={onToggleCanvas}>
               <PanelRightOpen size={15} />
             </button>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
       </header>
 
       <div className="message-list">
-        {!conversation.messages.length && !isRunning ? (
+        {projectView ? (
+          <div className="project-home">
+            <div className="project-home-header">
+              <ProjectIconMark icon={projectView.project.icon} color={projectView.project.color} size={22} />
+              <div>
+                <h2>{projectView.project.name}</h2>
+                <p>{projectView.conversations.length} chat{projectView.conversations.length === 1 ? "" : "s"}</p>
+              </div>
+              <div className="project-home-actions">
+                <button
+                  className="project-home-icon-button"
+                  type="button"
+                  aria-label={`Open ${projectView.project.name} settings`}
+                  title="Project settings"
+                  onClick={() => onEditProject(projectView.project)}
+                >
+                  <SlidersHorizontal size={15} />
+                </button>
+                <button type="button" onClick={() => onNewChatInProject(projectView.project.name)}>
+                  <MessageSquarePlus size={15} />
+                  New chat
+                </button>
+              </div>
+            </div>
+            <div className="project-chat-list">
+              {projectView.conversations.length ? (
+                projectView.conversations.map((projectConversation) => (
+                  <div
+                    className="project-chat-row"
+                    key={projectConversation.id}
+                  >
+                    {editingProjectChatId === projectConversation.id ? (
+                      <input
+                        className="project-chat-rename-input"
+                        autoFocus
+                        aria-label="Rename project chat"
+                        value={projectChatTitleDraft}
+                        onChange={(event) => setProjectChatTitleDraft(event.target.value)}
+                        onBlur={commitProjectChatRename}
+                        onKeyDown={handleProjectChatRenameKeyDown}
+                      />
+                    ) : (
+                      <button
+                        className="project-chat-row-select"
+                        type="button"
+                        onClick={() => onSelectConversation(projectConversation.id)}
+                      >
+                        <span>{projectConversation.title}</span>
+                        <small>{projectConversation.messages.at(-1)?.content.slice(0, 120) || "No messages yet."}</small>
+                      </button>
+                    )}
+                    <div className="project-chat-row-actions">
+                      <button
+                        type="button"
+                        aria-label={`Rename ${projectConversation.title}`}
+                        onClick={() => startProjectChatRename(projectConversation)}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={projectConversation.isArchived ? `Unarchive ${projectConversation.title}` : `Archive ${projectConversation.title}`}
+                        onClick={() => onToggleArchive(projectConversation.id)}
+                      >
+                        {projectConversation.isArchived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Delete ${projectConversation.title}`}
+                        onClick={() => onDeleteConversation(projectConversation.id)}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${projectConversation.title} from ${projectView.project.name}`}
+                        onClick={() => onMoveConversationToProject(projectConversation.id, defaultProjectName)}
+                      >
+                        <X size={13} />
+                      </button>
+                      <ProjectMoveMenu
+                        chatTitle={projectConversation.title}
+                        currentProjectName={projectView.project.name}
+                        projects={projectView.projects}
+                        onMove={(projectName) => onMoveConversationToProject(projectConversation.id, projectName)}
+                      />
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-chat" role="status">
+                  <h2>No chats here yet.</h2>
+                  <p>Start a new conversation in this project.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : null}
+        {!projectView && !conversation.messages.length && !isRunning ? (
           <div className="empty-chat" role="status">
             <h2>{emptyChatHeading}</h2>
             <p>{availableModels.length ? "Start a new conversation." : "Add a provider in Settings to start chatting."}</p>
           </div>
-        ) : (
+        ) : !projectView ? (
           conversation.messages.map((message) => (
             <article className={`message ${message.role}`} key={message.id}>
               {renderRoleHeader(message.role)}
@@ -338,8 +545,8 @@ export function ChatWorkspace({
               ) : null}
             </article>
           ))
-        )}
-        {isRunning ? (
+        ) : null}
+        {!projectView && isRunning ? (
           <article className="message assistant pending">
             {renderRoleHeader("assistant")}
             <p>{runState.pendingAssistantMessage?.content || "Thinking..."}</p>
@@ -382,53 +589,55 @@ export function ChatWorkspace({
         ) : null}
       </div>
 
-      <form className="composer" onSubmit={handleSubmit}>
-        {attachments.length || attachmentError ? (
-          <div className="composer-attachments">
-            {attachments.map((attachment) => (
-              <AttachmentChip
-                key={attachment.id}
-                attachment={attachment}
-                onRemove={() => removeAttachment(attachment.id)}
-              />
-            ))}
-            {attachmentError ? <span className="attachment-error">{attachmentError}</span> : null}
+      {!projectView ? (
+        <form className="composer" onSubmit={handleSubmit}>
+          {attachments.length || attachmentError ? (
+            <div className="composer-attachments">
+              {attachments.map((attachment) => (
+                <AttachmentChip
+                  key={attachment.id}
+                  attachment={attachment}
+                  onRemove={() => removeAttachment(attachment.id)}
+                />
+              ))}
+              {attachmentError ? <span className="attachment-error">{attachmentError}</span> : null}
+            </div>
+          ) : null}
+          <div className="composer-row">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={handleAttachFiles}
+            />
+            <button
+              className="attach-button"
+              type="button"
+              aria-label="Attach files"
+              title="Attach images or documents"
+              disabled={isRunning}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Paperclip size={17} />
+            </button>
+            <textarea
+              aria-label="Message"
+              placeholder="Ask anything..."
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={handleKeyDown}
+            />
+            <button
+              className="send-button"
+              type="submit"
+              disabled={!isRunning && !draft.trim() && !attachments.length}
+            >
+              {isRunning ? <Square size={17} /> : <Send size={17} />}
+            </button>
           </div>
-        ) : null}
-        <div className="composer-row">
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            hidden
-            onChange={handleAttachFiles}
-          />
-          <button
-            className="attach-button"
-            type="button"
-            aria-label="Attach files"
-            title="Attach images or documents"
-            disabled={isRunning}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Paperclip size={17} />
-          </button>
-          <textarea
-            aria-label="Message"
-            placeholder="Ask anything..."
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          <button
-            className="send-button"
-            type="submit"
-            disabled={!isRunning && !draft.trim() && !attachments.length}
-          >
-            {isRunning ? <Square size={17} /> : <Send size={17} />}
-          </button>
-        </div>
-      </form>
+        </form>
+      ) : null}
     </section>
   );
 }

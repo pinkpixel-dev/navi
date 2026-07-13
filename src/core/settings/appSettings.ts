@@ -1,3 +1,5 @@
+import type { ProjectSettings } from "../projects/projectSettings";
+
 export type SubmitShortcut = "enter" | "shift-enter";
 
 export interface AppSettings {
@@ -6,6 +8,7 @@ export interface AppSettings {
   userName?: string;
   userBio?: string;
   userInstructions?: string;
+  projects?: ProjectSettings[];
   customLlamaServerPath?: string;
   localRuntimeAcceleration?: "auto" | "cpu" | "cuda" | "vulkan" | "rocm" | "sycl";
   localRuntimeGpuLayers?: number;

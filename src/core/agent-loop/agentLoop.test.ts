@@ -297,6 +297,25 @@ describe("runAgentLoop", () => {
     expect(systemMessage?.content).toContain("Additional user instructions: Use concise, practical guidance.");
   });
 
+  test("adds project instructions to provider system context", async () => {
+    let capturedInput: ProviderCompleteInput | undefined;
+
+    await runAgentLoop({
+      conversation: { ...testConversation, projectName: "Pink Pixel" },
+      input: "Draft the next reply.",
+      projectInstructions: "Keep this project focused on Pink Pixel launch work.",
+      providerComplete: async (input: ProviderCompleteInput) => {
+        capturedInput = input;
+        return createTextResponse("Drafted.");
+      },
+    });
+
+    const systemMessage = capturedInput?.messages.find((message) => message.role === "system");
+    expect(systemMessage?.content).toContain(
+      "Project instructions for Pink Pixel: Keep this project focused on Pink Pixel launch work.",
+    );
+  });
+
   test("ignores blank personalization fields when creating provider system context", async () => {
     let capturedInput: ProviderCompleteInput | undefined;
 

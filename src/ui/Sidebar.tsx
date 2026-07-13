@@ -1,30 +1,34 @@
-import { KeyboardEvent, PointerEvent, useMemo, useState } from "react";
+import { KeyboardEvent, PointerEvent, useState } from "react";
 import {
-  Archive,
-  ArchiveRestore,
+  FolderPlus,
   MessageSquarePlus,
-  Pencil,
   Pin,
-  PinOff,
   Search,
   Settings,
-  Trash2,
+  SlidersHorizontal,
 } from "lucide-react";
 import type { Conversation } from "../core/conversation/types";
 import { formatRelativeTime } from "../core/conversation/formatRelativeTime";
-
-const allProjectsFilter = "__all__";
+import { defaultProjectName, type ProjectSettings } from "../core/projects/projectSettings";
+import { ChatActionsMenu } from "./ChatActionsMenu";
+import { ProjectIconMark } from "./projectVisuals";
 
 interface SidebarProps {
   activeConversationId: string;
+  activeProjectName: string | null;
   conversations: Conversation[];
+  projects: ProjectSettings[];
   onNewChat: (projectName?: string) => void;
+  onCreateProject: (name: string) => void;
+  onSelectProject: (projectName: string | null) => void;
+  onEditProject: (project: ProjectSettings) => void;
   onOpenSettings: () => void;
   onSelectConversation: (conversationId: string) => void;
   onDeleteConversation: (conversationId: string) => void;
   onTogglePin: (conversationId: string) => void;
   onToggleArchive: (conversationId: string) => void;
   onRenameConversation: (conversationId: string, title: string) => void;
+  onMoveConversationToProject: (conversationId: string, projectName: string) => void;
   onResizeStart: (event: PointerEvent<HTMLDivElement>) => void;
 }
 
@@ -35,6 +39,7 @@ interface ChatRowProps {
   isActive: boolean;
   editMode: RowEditMode;
   editDraft: string;
+  projectOptions: ProjectSettings[];
   onSelect: () => void;
   onStartEdit: () => void;
   onEditDraftChange: (value: string) => void;
@@ -43,6 +48,7 @@ interface ChatRowProps {
   onTogglePin: () => void;
   onToggleArchive: () => void;
   onDelete: () => void;
+  onMoveToProject: (projectName: string) => void;
 }
 
 function ChatRow({
@@ -50,6 +56,7 @@ function ChatRow({
   isActive,
   editMode,
   editDraft,
+  projectOptions,
   onSelect,
   onStartEdit,
   onEditDraftChange,
@@ -58,6 +65,7 @@ function ChatRow({
   onTogglePin,
   onToggleArchive,
   onDelete,
+  onMoveToProject,
 }: ChatRowProps) {
   const handleEditKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") {
@@ -91,80 +99,42 @@ function ChatRow({
           </>
         )}
       </button>
-      <div className="chat-row-actions">
-        <button
-          type="button"
-          aria-label={conversation.isPinned ? `Unpin ${conversation.title}` : `Pin ${conversation.title}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onTogglePin();
-          }}
-        >
-          {conversation.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
-        </button>
-        <button
-          type="button"
-          aria-label={`Rename ${conversation.title}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onStartEdit();
-          }}
-        >
-          <Pencil size={13} />
-        </button>
-        <button
-          type="button"
-          aria-label={conversation.isArchived ? `Unarchive ${conversation.title}` : `Archive ${conversation.title}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onToggleArchive();
-          }}
-        >
-          {conversation.isArchived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-        </button>
-        <button
-          type="button"
-          aria-label={`Delete ${conversation.title}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            onDelete();
-          }}
-        >
-          <Trash2 size={13} />
-        </button>
-      </div>
+      <ChatActionsMenu
+        conversation={conversation}
+        projectOptions={projectOptions}
+        onStartEdit={onStartEdit}
+        onTogglePin={onTogglePin}
+        onToggleArchive={onToggleArchive}
+        onDelete={onDelete}
+        onMoveToProject={onMoveToProject}
+      />
     </div>
   );
 }
 
 export function Sidebar({
   activeConversationId,
+  activeProjectName,
   conversations,
+  projects,
   onNewChat,
+  onCreateProject,
+  onSelectProject,
+  onEditProject,
   onOpenSettings,
   onSelectConversation,
   onDeleteConversation,
   onTogglePin,
   onToggleArchive,
   onRenameConversation,
+  onMoveConversationToProject,
   onResizeStart,
 }: SidebarProps) {
   const [searchText, setSearchText] = useState("");
-  const [projectFilter, setProjectFilter] = useState(allProjectsFilter);
   const [showArchived, setShowArchived] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editMode, setEditMode] = useState<RowEditMode>(null);
   const [editDraft, setEditDraft] = useState("");
-
-  const projectNames = useMemo(() => {
-    const names = new Set<string>();
-    for (const conversation of conversations) {
-      if (conversation.projectName) {
-        names.add(conversation.projectName);
-      }
-    }
-    return Array.from(names).sort((a, b) => a.localeCompare(b));
-  }, [conversations]);
 
   const startEdit = (conversation: Conversation) => {
     setEditingId(conversation.id);
@@ -196,13 +166,29 @@ export function Sidebar({
     return conversation.messages.some((message) => message.content.toLowerCase().includes(query));
   };
 
-  const matchesProject = (conversation: Conversation) =>
-    projectFilter === allProjectsFilter || conversation.projectName === projectFilter;
-
-  const filtered = conversations.filter((conversation) => matchesSearch(conversation) && matchesProject(conversation));
-  const archived = filtered.filter((conversation) => conversation.isArchived);
+  const filtered = conversations.filter(matchesSearch);
+  const archived = filtered.filter(
+    (conversation) => conversation.isArchived && conversation.projectName === defaultProjectName,
+  );
   const pinned = filtered.filter((conversation) => !conversation.isArchived && conversation.isPinned);
-  const recent = filtered.filter((conversation) => !conversation.isArchived && !conversation.isPinned);
+  const recent = filtered.filter(
+    (conversation) =>
+      !conversation.isArchived && !conversation.isPinned && conversation.projectName === defaultProjectName,
+  );
+
+  const handleCreateProject = () => {
+    const baseName = "New project";
+    const projectNames = new Set(projects.map((project) => project.name.toLowerCase()));
+    let nextName = baseName;
+    let suffix = 2;
+
+    while (projectNames.has(nextName.toLowerCase())) {
+      nextName = `${baseName} ${suffix}`;
+      suffix += 1;
+    }
+
+    onCreateProject(nextName);
+  };
 
   const renderRow = (conversation: Conversation) => (
     <ChatRow
@@ -211,6 +197,7 @@ export function Sidebar({
       isActive={conversation.id === activeConversationId}
       editMode={conversation.id === editingId ? editMode : null}
       editDraft={editDraft}
+      projectOptions={projects}
       onSelect={() => onSelectConversation(conversation.id)}
       onStartEdit={() => startEdit(conversation)}
       onEditDraftChange={setEditDraft}
@@ -219,6 +206,7 @@ export function Sidebar({
       onTogglePin={() => onTogglePin(conversation.id)}
       onToggleArchive={() => onToggleArchive(conversation.id)}
       onDelete={() => onDeleteConversation(conversation.id)}
+      onMoveToProject={(projectName) => onMoveConversationToProject(conversation.id, projectName)}
     />
   );
 
@@ -234,7 +222,7 @@ export function Sidebar({
       <button
         className="primary-button"
         type="button"
-        onClick={() => onNewChat(projectFilter === allProjectsFilter ? undefined : projectFilter)}
+        onClick={() => onNewChat()}
       >
         <MessageSquarePlus size={16} />
         New chat
@@ -249,22 +237,6 @@ export function Sidebar({
         />
       </label>
 
-      {projectNames.length > 1 ? (
-        <select
-          className="project-filter"
-          aria-label="Filter by project"
-          value={projectFilter}
-          onChange={(event) => setProjectFilter(event.target.value)}
-        >
-          <option value={allProjectsFilter}>All projects</option>
-          {projectNames.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
-        </select>
-      ) : null}
-
       {pinned.length ? (
         <section className="nav-section">
           <h2>Pinned</h2>
@@ -272,8 +244,28 @@ export function Sidebar({
         </section>
       ) : null}
 
+      <section className="nav-section projects-section">
+        <div className="nav-section-header">
+          <h2>Projects</h2>
+          <button type="button" aria-label="Create project" onClick={handleCreateProject}>
+            <FolderPlus size={14} />
+          </button>
+        </div>
+        {projects.map((project) => (
+          <div className={project.name === activeProjectName ? "project-row active" : "project-row"} key={project.id}>
+            <button type="button" onClick={() => onSelectProject(project.name)}>
+              <ProjectIconMark icon={project.icon} color={project.color} />
+              <span>{project.name}</span>
+            </button>
+            <button type="button" aria-label={`Edit ${project.name}`} onClick={() => onEditProject(project)}>
+              <SlidersHorizontal size={13} />
+            </button>
+          </div>
+        ))}
+      </section>
+
       <section className="nav-section grow">
-        <h2>Recent</h2>
+        <h2>Chats</h2>
         {recent.length ? (
           recent.map(renderRow)
         ) : filtered.length === 0 && searchText.trim() ? (

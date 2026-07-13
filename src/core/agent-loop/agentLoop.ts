@@ -19,6 +19,7 @@ interface RunAgentLoopInput {
   attachments?: MessageAttachment[];
   userInstructions?: string;
   userProfile?: UserProfileContext;
+  projectInstructions?: string;
   approvalPolicy?: ApprovalPolicy;
   limits?: RunLimits;
   retry?: RunRetryPolicy;
@@ -88,11 +89,17 @@ function createUserMessage(content: string, attachments?: MessageAttachment[]): 
   };
 }
 
-function createSystemPrompt(userInstructions?: string, userProfile?: UserProfileContext): string {
+function createSystemPrompt(
+  conversation: Conversation,
+  userInstructions?: string,
+  userProfile?: UserProfileContext,
+  projectInstructions?: string,
+): string {
   const contextLines: string[] = [];
   const name = userProfile?.name?.trim();
   const bio = userProfile?.bio?.trim();
   const instructions = userInstructions?.trim();
+  const projectContext = projectInstructions?.trim();
 
   if (name) {
     contextLines.push(`User name: ${name}`);
@@ -103,16 +110,24 @@ function createSystemPrompt(userInstructions?: string, userProfile?: UserProfile
   if (instructions) {
     contextLines.push(`Additional user instructions: ${instructions}`);
   }
+  if (projectContext) {
+    contextLines.push(`Project instructions for ${conversation.projectName}: ${projectContext}`);
+  }
 
   return contextLines.length ? `${defaultSystemPrompt}\n\n${contextLines.join("\n")}` : defaultSystemPrompt;
 }
 
-function createSystemMessage(userInstructions?: string, userProfile?: UserProfileContext): ChatMessage {
+function createSystemMessage(
+  conversation: Conversation,
+  userInstructions?: string,
+  userProfile?: UserProfileContext,
+  projectInstructions?: string,
+): ChatMessage {
   return {
     id: "navi-system-latest-message",
     role: "system",
     createdAt: createTimestamp(),
-    content: createSystemPrompt(userInstructions, userProfile),
+    content: createSystemPrompt(conversation, userInstructions, userProfile, projectInstructions),
   };
 }
 
@@ -144,9 +159,10 @@ function createProviderMessages(
   attachments?: MessageAttachment[],
   userInstructions?: string,
   userProfile?: UserProfileContext,
+  projectInstructions?: string,
 ): ChatMessage[] {
   return [
-    createSystemMessage(userInstructions, userProfile),
+    createSystemMessage(conversation, userInstructions, userProfile, projectInstructions),
     ...conversation.messages.filter(isProviderContextMessage),
     createUserMessage(input, attachments),
   ];
@@ -203,6 +219,7 @@ export async function runAgentLoop({
   attachments,
   userInstructions,
   userProfile,
+  projectInstructions,
   approvalPolicy = "allow-all",
   limits = defaultLimits,
   retry = { maxAttempts: 1 },
@@ -245,7 +262,14 @@ export async function runAgentLoop({
     };
   }
 
-  const workingMessages = createProviderMessages(conversation, input, attachments, userInstructions, userProfile);
+  const workingMessages = createProviderMessages(
+    conversation,
+    input,
+    attachments,
+    userInstructions,
+    userProfile,
+    projectInstructions,
+  );
   const seedLength = workingMessages.length;
   const allToolCalls: ToolCallEvent[] = [];
   let totalToolCallCount = 0;

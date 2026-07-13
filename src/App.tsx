@@ -1,6 +1,7 @@
 import { CSSProperties, PointerEvent, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { CanvasPanel } from "./ui/CanvasPanel";
 import { ChatWorkspace } from "./ui/ChatWorkspace";
+import { ProjectSettingsModal } from "./ui/ProjectSettingsModal";
 import { Sidebar } from "./ui/Sidebar";
 import { SettingsPanel } from "./ui/SettingsPanel";
 import { confirmDestructiveAction } from "./ui/confirmDialog";
@@ -29,6 +30,12 @@ import { createDefaultLlamaRuntimeDriver } from "./core/local-models/llamaRuntim
 import { loadAppSettings, saveAppSettings, type AppSettings } from "./core/settings/appSettings";
 import { createDefaultMcpServerDriver, type McpServerConfig, type McpServerStatus } from "./core/mcp/mcpServer";
 import { mcpToolRisk, toProviderToolSchema } from "./core/mcp/mcpToolSchema";
+import {
+  createProjectSettings,
+  defaultProjectName,
+  mergeProjectSettings,
+  type ProjectSettings,
+} from "./core/projects/projectSettings";
 
 const conversationRepository = createDefaultConversationRepository();
 const providerConfigRepository = createDefaultProviderConfigRepository();
@@ -95,7 +102,7 @@ function createBlankConversation(model?: ProviderModel, projectName?: string): C
   return {
     id: crypto.randomUUID(),
     title: "New chat",
-    projectName: projectName?.trim() || "Navi",
+    projectName: projectName?.trim() || defaultProjectName,
     provider: model?.provider ?? "No provider",
     model: model?.id ?? "",
     processing: model?.location === "cloud" ? "cloud" : model?.location === "local" ? "local" : "external",
@@ -159,6 +166,9 @@ export default function App() {
   const [localModels, setLocalModels] = useState<LocalModel[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [appSettings, setAppSettings] = useState<AppSettings>(() => loadAppSettings());
+  const [activeProjectName, setActiveProjectName] = useState<string | null>(null);
+  const [projectHomeName, setProjectHomeName] = useState<string | null>(null);
+  const [projectSettingsDraft, setProjectSettingsDraft] = useState<ProjectSettings | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerConfig[]>([]);
   const [mcpConnections, setMcpConnections] = useState<Record<string, McpServerStatus>>({});
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
@@ -186,6 +196,32 @@ export default function App() {
     () => availableModels.find((model) => model.id === activeConversation.model),
     [activeConversation.model, availableModels],
   );
+  const projects = useMemo(
+    () => mergeProjectSettings(appSettings.projects ?? [], conversations),
+    [appSettings.projects, conversations],
+  );
+  const activeProject = useMemo(
+    () => projects.find((project) => project.name === activeConversation.projectName) ?? null,
+    [activeConversation.projectName, projects],
+  );
+  const projectHome = useMemo(() => {
+    if (!projectHomeName) {
+      return null;
+    }
+
+    const project = projects.find((current) => current.name === projectHomeName);
+    if (!project) {
+      return null;
+    }
+
+    return {
+      project,
+      projects,
+      conversations: conversations.filter(
+        (conversation) => !conversation.isArchived && conversation.projectName === project.name,
+      ),
+    };
+  }, [conversations, projectHomeName, projects]);
 
   const toolRoute = useMemo(() => {
     const route = new Map<string, { serverId: string; serverName: string }>();
@@ -357,6 +393,10 @@ export default function App() {
     saveAppSettings(nextSettings);
   };
 
+  const handleProjectsChange = (nextProjects: ProjectSettings[]) => {
+    handleAppSettingsChange({ ...appSettings, projects: nextProjects });
+  };
+
   const saveConversationSnapshot = async (
     conversation: Conversation,
     runEvents = runState.events,
@@ -476,9 +516,142 @@ export default function App() {
 
     updateConversationList((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
+    setActiveProjectName(projectName ?? null);
+    setProjectHomeName(null);
     dispatchRunState({ type: "reset" });
     saveConversationSnapshot(conversation, [], []).catch((error: unknown) => {
       console.error("Could not save new conversation", error);
+    });
+  };
+
+  const handleCreateProject = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === defaultProjectName) {
+      return;
+    }
+
+    const existing = projects.find((project) => project.name.toLowerCase() === trimmed.toLowerCase());
+    if (existing) {
+      setActiveProjectName(existing.name);
+      setProjectHomeName(existing.name);
+      return;
+    }
+
+    const project = createProjectSettings(trimmed, projects.length);
+    handleProjectsChange([...projects, project]);
+    setActiveProjectName(project.name);
+    setProjectHomeName(project.name);
+  };
+
+  const handleSaveProject = (project: ProjectSettings) => {
+    const trimmedName = project.name.trim();
+    if (!trimmedName) {
+      return;
+    }
+
+    const previousProject = projects.find((current) => current.id === project.id);
+    const nextProject: ProjectSettings = { ...project, name: trimmedName };
+    const nextProjects = projects.map((current) => (current.id === project.id ? nextProject : current));
+    handleProjectsChange(nextProjects);
+
+    if (previousProject && previousProject.name !== trimmedName) {
+      const updatedConversations = updateConversationList((current) =>
+        current.map((conversation) =>
+          conversation.projectName === previousProject.name
+            ? { ...conversation, projectName: trimmedName, updatedAt: new Date().toISOString() }
+            : conversation,
+        ),
+      );
+
+      for (const conversation of updatedConversations.filter((current) => current.projectName === trimmedName)) {
+        conversationRepository.updateConversationMetadata(conversation).catch((error: unknown) => {
+          console.error("Could not save renamed project chat", error);
+        });
+      }
+
+      if (activeProjectName === previousProject.name) {
+        setActiveProjectName(trimmedName);
+      }
+      if (projectHomeName === previousProject.name) {
+        setProjectHomeName(trimmedName);
+      }
+    }
+  };
+
+  const handleOpenProjectSettings = (project: ProjectSettings) => {
+    setProjectSettingsDraft({ ...project });
+  };
+
+  const handleSaveProjectSettings = () => {
+    if (!projectSettingsDraft) {
+      return;
+    }
+
+    handleSaveProject(projectSettingsDraft);
+    setProjectSettingsDraft(null);
+  };
+
+  const handleDeleteProject = async (project: ProjectSettings) => {
+    const confirmed = await confirmDestructiveAction(
+      `Delete "${project.name}"? Chats in this project will move back to Chats.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    handleProjectsChange(projects.filter((current) => current.id !== project.id));
+    const movedConversationIds = new Set(
+      conversations.filter((conversation) => conversation.projectName === project.name).map((conversation) => conversation.id),
+    );
+    const updatedConversations = updateConversationList((current) =>
+      current.map((conversation) =>
+        movedConversationIds.has(conversation.id)
+          ? { ...conversation, projectName: defaultProjectName, updatedAt: new Date().toISOString() }
+          : conversation,
+      ),
+    );
+
+    for (const conversation of updatedConversations.filter((current) => movedConversationIds.has(current.id))) {
+      conversationRepository.updateConversationMetadata(conversation).catch((error: unknown) => {
+        console.error("Could not save project removal for chat", error);
+      });
+    }
+
+    if (activeProjectName === project.name) {
+      setActiveProjectName(null);
+    }
+    if (projectHomeName === project.name) {
+      setProjectHomeName(null);
+    }
+    setProjectSettingsDraft(null);
+  };
+
+  const handleSelectProject = (projectName: string | null) => {
+    setActiveProjectName(projectName);
+    setProjectHomeName(projectName);
+  };
+
+  const handleSelectConversation = (conversationId: string) => {
+    setActiveConversationId(conversationId);
+    setActiveProjectName(null);
+    setProjectHomeName(null);
+  };
+
+  const handleMoveConversationToProject = (conversationId: string, projectName: string) => {
+    const target = conversations.find((conversation) => conversation.id === conversationId);
+    if (!target) {
+      return;
+    }
+
+    const nextProjectName = projectName.trim() || defaultProjectName;
+    if (target.projectName === nextProjectName) {
+      return;
+    }
+
+    const updated: Conversation = { ...target, projectName: nextProjectName, updatedAt: new Date().toISOString() };
+    updateConversationList((current) => current.map((conversation) => (conversation.id === conversationId ? updated : conversation)));
+    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
+      console.error("Could not save moved conversation", error);
     });
   };
 
@@ -544,6 +717,7 @@ export default function App() {
         name: appSettings.userName,
         bio: appSettings.userBio,
       },
+      projectInstructions: activeProject?.instructions,
       signal: controller.signal,
       retry: {
         maxAttempts: 2,
@@ -704,14 +878,20 @@ export default function App() {
     <main className={shellClassName} style={layoutStyle}>
       <Sidebar
         activeConversationId={activeConversation.id}
+        activeProjectName={activeProjectName}
         conversations={conversations}
+        projects={projects}
         onNewChat={handleNewChat}
+        onCreateProject={handleCreateProject}
+        onSelectProject={handleSelectProject}
+        onEditProject={handleOpenProjectSettings}
         onOpenSettings={() => setShowSettings(true)}
-        onSelectConversation={setActiveConversationId}
+        onSelectConversation={handleSelectConversation}
         onDeleteConversation={handleDeleteConversation}
         onTogglePin={handleTogglePin}
         onToggleArchive={handleToggleArchive}
         onRenameConversation={handleRenameConversation}
+        onMoveConversationToProject={handleMoveConversationToProject}
         onResizeStart={handleSidebarResizeStart}
       />
       <ChatWorkspace
@@ -721,6 +901,8 @@ export default function App() {
         isCanvasOpen={isCanvasOpen}
         availableModels={availableModels}
         submitShortcut={appSettings.submitShortcut}
+        projects={projects}
+        projectView={projectHome}
         userDisplayName={appSettings.userName}
         userAvatarSrc={appSettings.userAvatar ?? "/user.png"}
         assistantAvatarSrc={appSettings.assistantAvatar ?? "/assistant.png"}
@@ -728,6 +910,14 @@ export default function App() {
         onApprovalDecision={(decision) => pendingApproval?.resolve(decision)}
         onCancelRun={handleCancelRun}
         onModelChange={handleModelChange}
+        onNewChatInProject={(projectName) => handleNewChat(projectName)}
+        onEditProject={handleOpenProjectSettings}
+        onSelectConversation={handleSelectConversation}
+        onMoveConversationToProject={handleMoveConversationToProject}
+        onRenameConversation={handleRenameConversation}
+        onTogglePin={handleTogglePin}
+        onToggleArchive={handleToggleArchive}
+        onDeleteConversation={handleDeleteConversation}
         onToggleCanvas={() => setIsCanvasOpen((current) => !current)}
         onSend={handleSend}
       />
@@ -756,6 +946,15 @@ export default function App() {
           appSettings={appSettings}
           onAppSettingsChange={handleAppSettingsChange}
           onClose={() => setShowSettings(false)}
+        />
+      ) : null}
+      {projectSettingsDraft ? (
+        <ProjectSettingsModal
+          project={projectSettingsDraft}
+          onChange={setProjectSettingsDraft}
+          onClose={() => setProjectSettingsDraft(null)}
+          onSave={handleSaveProjectSettings}
+          onDelete={() => handleDeleteProject(projectSettingsDraft)}
         />
       ) : null}
     </main>
