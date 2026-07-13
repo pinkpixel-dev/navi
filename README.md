@@ -1,6 +1,6 @@
 # Navi
 
-Navi is a local-first chat app and MCP client built with Tauri, React, and TypeScript. You can chat with OpenAI, Anthropic, Gemini, OpenRouter, any OpenAI-compatible endpoint, Ollama, LM Studio, or a model running entirely on your own machine through a managed llama.cpp runtime, all from the same app, with real streaming responses and MCP tool use.
+Navi is a chat app and MCP client built with Tauri, React, and TypeScript. You can chat with OpenAI, Anthropic, Gemini, OpenRouter, any OpenAI-compatible endpoint, Ollama, LM Studio, or a model running entirely on your own machine through a managed llama.cpp runtime, all from the same app, with real streaming responses and MCP tool use.
 
 <p align="center">
   <img src="screenshots/screenshot1.png" width="850" alt="Navi chat interface">
