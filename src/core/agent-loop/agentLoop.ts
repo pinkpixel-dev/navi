@@ -1,16 +1,12 @@
 import type { ChatMessage, Conversation, MessageAttachment, ToolCallEvent } from "../conversation/types";
 import type { ProviderCompleteInput, ProviderResponse, ProviderToolSchema } from "../providers/types";
+import { createProviderMessages, type UserProfileContext } from "./systemPrompt";
 import type { AgentRunResult, ApprovalDecision, ApprovalPolicy, RunEvent, RunLimits, RunRetryPolicy } from "./types";
 
 type ProviderComplete = (input: ProviderCompleteInput) => Promise<ProviderResponse>;
 interface ToolExecutionResult {
   content: string;
   isError: boolean;
-}
-
-interface UserProfileContext {
-  name?: string;
-  bio?: string;
 }
 
 interface RunAgentLoopInput {
@@ -36,19 +32,6 @@ const defaultLimits: RunLimits = {
   maxModelSteps: 8,
   maxToolCalls: 16,
 };
-
-const seedMessageIds = new Set(["message-welcome", "message-plan", "message-mcp"]);
-const internalAssistantMessages = new Set([
-  "The run was cancelled.",
-  "The run timed out before the provider responded.",
-  "The run stopped because the model step limit was reached.",
-]);
-const defaultSystemPrompt =
-  "Answer the user's latest message directly. Use earlier messages and attachments only as context when they are relevant or when the user asks about them. Do not summarize or answer earlier attachments unless the latest message asks for that.";
-
-function isInternalFailureMessage(content: string): boolean {
-  return content.startsWith("The provider request failed");
-}
 
 function createEventId(): string {
   return crypto.randomUUID();
@@ -79,58 +62,6 @@ function createTimeoutMessage(): ChatMessage {
   return createFallbackMessage("The run timed out before the provider responded.");
 }
 
-function createUserMessage(content: string, attachments?: MessageAttachment[]): ChatMessage {
-  return {
-    id: crypto.randomUUID(),
-    role: "user",
-    createdAt: createTimestamp(),
-    content,
-    ...(attachments?.length ? { attachments } : {}),
-  };
-}
-
-function createSystemPrompt(
-  conversation: Conversation,
-  userInstructions?: string,
-  userProfile?: UserProfileContext,
-  projectInstructions?: string,
-): string {
-  const contextLines: string[] = [];
-  const name = userProfile?.name?.trim();
-  const bio = userProfile?.bio?.trim();
-  const instructions = userInstructions?.trim();
-  const projectContext = projectInstructions?.trim();
-
-  if (name) {
-    contextLines.push(`User name: ${name}`);
-  }
-  if (bio) {
-    contextLines.push(`User bio: ${bio}`);
-  }
-  if (instructions) {
-    contextLines.push(`Additional user instructions: ${instructions}`);
-  }
-  if (projectContext) {
-    contextLines.push(`Project instructions for ${conversation.projectName}: ${projectContext}`);
-  }
-
-  return contextLines.length ? `${defaultSystemPrompt}\n\n${contextLines.join("\n")}` : defaultSystemPrompt;
-}
-
-function createSystemMessage(
-  conversation: Conversation,
-  userInstructions?: string,
-  userProfile?: UserProfileContext,
-  projectInstructions?: string,
-): ChatMessage {
-  return {
-    id: "navi-system-latest-message",
-    role: "system",
-    createdAt: createTimestamp(),
-    content: createSystemPrompt(conversation, userInstructions, userProfile, projectInstructions),
-  };
-}
-
 function createToolResultMessage(toolCallId: string, content: string): ChatMessage {
   return {
     id: crypto.randomUUID(),
@@ -139,33 +70,6 @@ function createToolResultMessage(toolCallId: string, content: string): ChatMessa
     content,
     toolCallId,
   };
-}
-
-function isProviderContextMessage(message: ChatMessage): boolean {
-  if (seedMessageIds.has(message.id)) {
-    return false;
-  }
-
-  if (message.role === "assistant" && (internalAssistantMessages.has(message.content) || isInternalFailureMessage(message.content))) {
-    return false;
-  }
-
-  return true;
-}
-
-function createProviderMessages(
-  conversation: Conversation,
-  input: string,
-  attachments?: MessageAttachment[],
-  userInstructions?: string,
-  userProfile?: UserProfileContext,
-  projectInstructions?: string,
-): ChatMessage[] {
-  return [
-    createSystemMessage(conversation, userInstructions, userProfile, projectInstructions),
-    ...conversation.messages.filter(isProviderContextMessage),
-    createUserMessage(input, attachments),
-  ];
 }
 
 async function runWithControls<T>(operation: () => Promise<T>, signal?: AbortSignal, timeoutMs?: number): Promise<T> {

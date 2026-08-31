@@ -30,6 +30,8 @@ const fenceLanguageKinds: Record<string, ArtifactKind> = {
 
 const imagePattern = /!\[([^\]]*)\]\((data:image\/[^)\s]+|https?:\/\/[^)\s]+\.(?:png|jpe?g|gif|webp))\)/g;
 const fencePattern = /```([^\n`]*)\n([\s\S]*?)```/g;
+const htmlDocumentStartPattern = /<!doctype\s+html\b[^>]*>|<html\b[^>]*>/i;
+const svgDocumentStartPattern = /<svg\b[^>]*>/i;
 
 function detectFenceKind(language: string, source: string): { kind: ArtifactKind; language?: string } {
   const normalized = language.trim().toLowerCase();
@@ -72,6 +74,30 @@ function artifactTitle(kind: ArtifactKind, source: string, language?: string): s
   return "Text Artifact";
 }
 
+function extractCompleteRootDocument(content: string, startPattern: RegExp, closingTag: string): string | null {
+  const startMatch = startPattern.exec(content);
+  if (!startMatch) {
+    return null;
+  }
+
+  const closingIndex = content.toLowerCase().lastIndexOf(closingTag);
+  if (closingIndex < startMatch.index + startMatch[0].length) {
+    return null;
+  }
+
+  return content.slice(startMatch.index, closingIndex + closingTag.length).trim();
+}
+
+function detectUnfencedDocument(content: string): { kind: "html" | "svg"; source: string } | null {
+  const html = extractCompleteRootDocument(content, htmlDocumentStartPattern, "</html>");
+  if (html && /<html\b[^>]*>/i.test(html)) {
+    return { kind: "html", source: html };
+  }
+
+  const svg = extractCompleteRootDocument(content, svgDocumentStartPattern, "</svg>");
+  return svg ? { kind: "svg", source: svg } : null;
+}
+
 /** Extracts every renderable artifact (fenced blocks and images) from one message. */
 export function extractArtifactsFromMessage(message?: ChatMessage): Artifact[] {
   if (!message || message.role !== "assistant" || !message.content) {
@@ -100,6 +126,20 @@ export function extractArtifactsFromMessage(message?: ChatMessage): Artifact[] {
       createdAt: message.createdAt,
     });
     fenceIndex += 1;
+  }
+
+  if (artifacts.length === 0) {
+    const detected = detectUnfencedDocument(message.content);
+    if (detected) {
+      artifacts.push({
+        id: `${message.id}-artifact`,
+        title: artifactTitle(detected.kind, detected.source),
+        kind: detected.kind,
+        source: detected.source,
+        messageId: message.id,
+        createdAt: message.createdAt,
+      });
+    }
   }
 
   let imageIndex = 0;

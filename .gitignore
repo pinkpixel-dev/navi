@@ -9,11 +9,4 @@ src-tauri/gen
 .claude/
 .codex/
 
-docs/
-CHANGELOG.md
-ERRORS.md
-MEMORY.md
-OVERVIEW.md
-PLAN.md
-ROADMAP.md
-TOOLS.md
+DOCS/

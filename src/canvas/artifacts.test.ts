@@ -55,6 +55,67 @@ describe("extractArtifactsFromMessage", () => {
     expect(artifacts.map((artifact) => artifact.kind)).toEqual(["svg", "html"]);
   });
 
+  test("recovers a complete unfenced HTML document and excludes surrounding explanation", () => {
+    const message = assistantMessage(
+      "m-html",
+      [
+        "Save this as a page:",
+        "<!doctype html>",
+        '<html lang="en"><head><title>Recovered page</title></head><body>Hello</body></html>',
+        "The page is ready.",
+      ].join("\n"),
+    );
+
+    expect(extractArtifactsFromMessage(message)).toEqual([
+      expect.objectContaining({
+        id: "m-html-artifact",
+        kind: "html",
+        title: "Recovered page",
+        source:
+          '<!doctype html>\n<html lang="en"><head><title>Recovered page</title></head><body>Hello</body></html>',
+      }),
+    ]);
+  });
+
+  test("recovers complete HTML without a doctype and a standalone SVG", () => {
+    const html = assistantMessage("m-html-root", "Here it is:\n<html><body>Page</body></html>");
+    const svg = assistantMessage(
+      "m-svg",
+      "Logo source:\n<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='4' /></svg>\nDone.",
+    );
+
+    expect(extractArtifactsFromMessage(html)[0]).toMatchObject({ kind: "html", source: "<html><body>Page</body></html>" });
+    expect(extractArtifactsFromMessage(svg)[0]).toMatchObject({
+      kind: "svg",
+      source: "<svg viewBox='0 0 10 10'><circle cx='5' cy='5' r='4' /></svg>",
+    });
+  });
+
+  test("does not infer partial documents, fragments, or unfenced Mermaid", () => {
+    expect(extractArtifactsFromMessage(assistantMessage("m-fragment", "<div>Hello</div>"))).toEqual([]);
+    expect(extractArtifactsFromMessage(assistantMessage("m-html-open", "<!doctype html><html><body>Hello"))).toEqual([]);
+    expect(extractArtifactsFromMessage(assistantMessage("m-html-rootless", "<!doctype html><body>Hello</body></html>"))).toEqual(
+      [],
+    );
+    expect(extractArtifactsFromMessage(assistantMessage("m-svg-open", "<svg><circle /></svg-ish>"))).toEqual([]);
+    expect(extractArtifactsFromMessage(assistantMessage("m-mermaid", "graph TD\nA --> B"))).toEqual([]);
+  });
+
+  test("keeps fenced artifacts authoritative and does not add an unfenced duplicate", () => {
+    const message = assistantMessage("m-fenced", "```html\n<html><body>Page</body></html>\n```");
+
+    expect(extractArtifactsFromMessage(message)).toHaveLength(1);
+  });
+
+  test("does not let an image reference suppress unfenced document recovery", () => {
+    const message = assistantMessage(
+      "m-html-image",
+      "![Reference](https://example.com/reference.png)\n<!doctype html><html><body>Page</body></html>",
+    );
+
+    expect(extractArtifactsFromMessage(message).map((artifact) => artifact.kind)).toEqual(["html", "image"]);
+  });
+
   test("extracts markdown image references as image artifacts", () => {
     const message = assistantMessage("m3", "Look: ![A chart](data:image/png;base64,aGk=)");
 

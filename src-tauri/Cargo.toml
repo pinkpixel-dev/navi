@@ -1,6 +1,6 @@
 [package]
 name = "navi"
-version = "1.0.0"
+version = "1.0.1"
 description = "MCP client chat app for local and hosted models."
 authors = ["Pink Pixel"]
 edition = "2021"
