@@ -22,6 +22,7 @@ import { defaultProjectName, type ProjectSettings } from "../core/projects/proje
 import { ChatActionsMenu } from "./ChatActionsMenu";
 import { ProjectMoveMenu } from "./ProjectMoveMenu";
 import { ProjectIconMark } from "./projectVisuals";
+import { MessageContent } from "./MessageContent";
 
 interface ChatWorkspaceProps {
   conversation: Conversation;
@@ -546,7 +547,7 @@ export function ChatWorkspace({
                   ))}
                 </div>
               ) : null}
-              <p>{message.content}</p>
+              <MessageContent content={message.content} role={message.role} />
               {message.toolCalls?.length ? (
                 <div className="tool-stack">
                   {message.toolCalls.map((toolCall) => (
@@ -567,7 +568,11 @@ export function ChatWorkspace({
         {!projectView && isRunning ? (
           <article className="message assistant pending">
             {renderRoleHeader("assistant")}
-            <p>{runState.pendingAssistantMessage?.content || "Thinking..."}</p>
+            <MessageContent
+              content={runState.pendingAssistantMessage?.content || "Thinking..."}
+              role="assistant"
+              isStreaming
+            />
             {runState.toolCalls.length ? (
               <div className="tool-stack">
                 {runState.toolCalls.map((toolCall) => (

@@ -1,0 +1,328 @@
+.message {
+  min-width: 0;
+  width: min(760px, 100%);
+}
+
+.message.user {
+  width: auto;
+}
+
+.message-content {
+  display: grid;
+  min-width: 0;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  line-height: 1.58;
+  overflow-wrap: anywhere;
+}
+
+.message-content > :first-child,
+.message-content > :first-child > :first-child {
+  margin-top: 0;
+}
+
+.message-content > :last-child,
+.message-content > :last-child > :last-child {
+  margin-bottom: 0;
+}
+
+.message-content h2,
+.message-content h3,
+.message-content h4 {
+  margin: 1.1rem 0 0.4rem;
+  color: var(--text);
+  line-height: 1.25;
+}
+
+.message-content h2 {
+  font-size: 1.1rem;
+}
+
+.message-content h3,
+.message-content h4 {
+  font-size: 0.98rem;
+}
+
+.message-content p,
+.message-content ul,
+.message-content ol,
+.message-content blockquote,
+.message-content pre,
+.message-content table,
+.message-content details {
+  margin: 0.65rem 0 0;
+}
+
+.message-content ul,
+.message-content ol {
+  padding-left: 1.35rem;
+}
+
+.message-content li + li {
+  margin-top: 0.25rem;
+}
+
+.message-content a {
+  color: var(--accent-text);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.message-content a:hover {
+  color: var(--accent);
+}
+
+.message-content a:focus-visible,
+.message-content summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.message-content blockquote {
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--border-strong);
+  color: var(--muted);
+}
+
+.message-content pre,
+.rich-response-error pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  white-space: pre;
+}
+
+.message-content code {
+  border-radius: 4px;
+  background: var(--surface);
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  font-size: 0.9em;
+}
+
+.message-content :not(pre) > code {
+  padding: 0.1rem 0.3rem;
+}
+
+.message-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.message-content th,
+.message-content td {
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.message-content th {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.message-content summary {
+  cursor: pointer;
+  color: var(--text-soft);
+  font-weight: 650;
+}
+
+.message-plain-text {
+  overflow-wrap: anywhere;
+}
+
+.rich-response,
+.rich-response [data-navi="response"] {
+  display: grid;
+  min-width: 0;
+  gap: 0.75rem;
+}
+
+.rich-response [data-navi="card"],
+.rich-response [data-navi="callout"] {
+  min-width: 0;
+  padding: 0.85rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-soft);
+}
+
+.rich-response [data-navi="callout"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.rich-callout-label {
+  display: block;
+  width: fit-content;
+  margin-bottom: 0.35rem;
+  color: var(--accent-text);
+  font-size: 0.72rem;
+  font-weight: 750;
+  text-transform: capitalize;
+}
+
+.rich-response [data-navi="badge"] {
+  display: inline-flex;
+  width: fit-content;
+  padding: 0.18rem 0.45rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-soft);
+  background: var(--surface);
+  font-size: 0.75rem;
+  font-weight: 650;
+}
+
+.rich-response [data-navi="columns"] {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr));
+  gap: 0.75rem;
+}
+
+.rich-response [data-navi="steps"] {
+  counter-reset: rich-step;
+  list-style: none;
+  padding-left: 0;
+}
+
+.rich-response [data-navi="steps"] > li {
+  counter-increment: rich-step;
+  display: grid;
+  grid-template-columns: 1.6rem minmax(0, 1fr);
+  gap: 0.55rem;
+}
+
+.rich-response [data-navi="steps"] > li::before {
+  content: counter(rich-step);
+  display: grid;
+  place-items: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  color: var(--accent-text);
+  font-size: 0.75rem;
+  font-weight: 750;
+}
+
+.rich-response [data-navi="metric"] {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem;
+  border-top: 1px solid var(--border-strong);
+}
+
+.rich-response [data-navi="metric"] strong {
+  color: var(--accent-text);
+  font-size: 1.35rem;
+}
+
+.rich-response [data-navi="caption"] {
+  color: var(--muted-strong);
+  font-size: 0.8rem;
+}
+
+.rich-response-pending,
+.rich-response-error {
+  padding: 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.rich-response-error strong {
+  color: var(--text-soft);
+}
+
+.rich-response-error p {
+  margin: 0.35rem 0 0;
+}
+
+.settings-checkbox-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.8rem;
+  min-height: 4.75rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  cursor: pointer;
+}
+
+.settings-checkbox-row.enabled {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.settings-checkbox-row:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-checkbox-row input {
+  width: 1.3rem;
+  height: 1.3rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.settings-checkbox-copy {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.settings-form label .settings-checkbox-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.settings-form label .settings-checkbox-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.75rem;
+  padding: 0.18rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted-strong);
+  background: var(--surface);
+  font-size: 0.72rem;
+}
+
+.settings-checkbox-row.enabled .settings-checkbox-status {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  color: var(--accent-text);
+}
+
+.settings-checkbox-row small {
+  color: var(--muted-strong);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+@media (max-width: 480px) {
+  .message-content {
+    gap: 0.6rem;
+  }
+
+  .rich-response [data-navi="columns"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .message-content th,
+  .message-content td {
+    padding: 0.45rem 0.5rem;
+  }
+}

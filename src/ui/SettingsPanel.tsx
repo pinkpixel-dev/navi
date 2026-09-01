@@ -28,8 +28,9 @@ import {
   valuesFromPresetServerConfig,
   type McpToolPreset,
 } from "../core/tools/mcpToolPresets";
-import type { AccentColor, AppSettings, SubmitShortcut, ThemeMode } from "../core/settings/appSettings";
+import type { AppSettings } from "../core/settings/appSettings";
 import { confirmDestructiveAction } from "./confirmDialog";
+import { GeneralSettings } from "./GeneralSettings";
 
 interface SettingsPanelProps {
   providerConfigs: ProviderConfig[];
@@ -146,16 +147,6 @@ function isDefaultProviderName(name: string): boolean {
 
 const providerTypesWithRequiredKey = new Set<ProviderType>(["openai", "anthropic", "gemini", "openrouter"]);
 const providerTypesWithBaseUrl = new Set<ProviderType>(["openai-compatible", "ollama", "lmstudio"]);
-const accentColorOptions: { value: AccentColor; label: string }[] = [
-  { value: "blue", label: "Blue" },
-  { value: "red", label: "Red" },
-  { value: "orange", label: "Orange" },
-  { value: "yellow", label: "Yellow" },
-  { value: "green", label: "Green" },
-  { value: "purple", label: "Purple" },
-  { value: "pink", label: "Pink" },
-];
-
 function defaultBaseUrlForType(type: ProviderType): string | undefined {
   switch (type) {
     case "openai-compatible":
@@ -816,57 +807,7 @@ export function SettingsPanel({
               </form>
             </div>
           ) : null}
-          <div className="settings-form settings-general">
-            <h3>General</h3>
-            <label>
-              <span>Send message with</span>
-              <select
-                value={appSettings.submitShortcut}
-                onChange={(event) =>
-                  onAppSettingsChange({
-                    ...appSettings,
-                    submitShortcut: event.target.value as SubmitShortcut,
-                  })
-                }
-              >
-                <option value="enter">Enter (Shift+Enter for a new line)</option>
-                <option value="shift-enter">Shift+Enter (Enter for a new line)</option>
-              </select>
-            </label>
-            <label>
-              <span>Theme</span>
-              <select
-                value={appSettings.themeMode ?? "dark"}
-                onChange={(event) =>
-                  onAppSettingsChange({
-                    ...appSettings,
-                    themeMode: event.target.value as ThemeMode,
-                  })
-                }
-              >
-                <option value="dark">Dark</option>
-                <option value="light">Light</option>
-              </select>
-            </label>
-            <label>
-              <span>Accent color</span>
-              <select
-                value={appSettings.accentColor ?? "blue"}
-                onChange={(event) =>
-                  onAppSettingsChange({
-                    ...appSettings,
-                    accentColor: event.target.value as AccentColor,
-                  })
-                }
-              >
-                {accentColorOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
+          <GeneralSettings appSettings={appSettings} onChange={onAppSettingsChange} />
           <div className="settings-form settings-personalization">
             <h3>Personalization</h3>
             <label>

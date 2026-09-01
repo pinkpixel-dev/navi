@@ -106,10 +106,16 @@ export function extractArtifactsFromMessage(message?: ChatMessage): Artifact[] {
 
   const artifacts: Artifact[] = [];
   let fenceIndex = 0;
+  let hasFencedContent = false;
 
   for (const match of message.content.matchAll(fencePattern)) {
+    hasFencedContent = true;
     const [, language, body] = match;
     const source = body.trim();
+    if (language.trim().toLowerCase() === "navi-rich") {
+      fenceIndex += 1;
+      continue;
+    }
     if (!source) {
       fenceIndex += 1;
       continue;
@@ -128,7 +134,7 @@ export function extractArtifactsFromMessage(message?: ChatMessage): Artifact[] {
     fenceIndex += 1;
   }
 
-  if (artifacts.length === 0) {
+  if (artifacts.length === 0 && !hasFencedContent) {
     const detected = detectUnfencedDocument(message.content);
     if (detected) {
       artifacts.push({

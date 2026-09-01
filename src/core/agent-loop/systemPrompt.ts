@@ -1,4 +1,5 @@
 import type { ChatMessage, Conversation, MessageAttachment } from "../conversation/types";
+import { richResponsePrompt } from "../rich-response/richResponsePrompt";
 
 export interface UserProfileContext {
   name?: string;
@@ -41,16 +42,29 @@ const defaultSystemPrompt = [
   artifactProtocol,
 ].join("\n\n");
 
+const richResponseTurnRequirement = [
+  "<navi_response_format>",
+  "Rich Responses is on for this turn.",
+  "Return the complete conversational answer inside one fenced navi-rich block.",
+  "Start the answer with ```navi-rich and end that block with ```.",
+  "Do not return ordinary Markdown or plain text instead.",
+  "</navi_response_format>",
+].join("\n");
+
 function createTimestamp(): string {
   return new Date().toISOString();
 }
 
-function createUserMessage(content: string, attachments?: MessageAttachment[]): ChatMessage {
+function createUserMessage(
+  content: string,
+  attachments?: MessageAttachment[],
+  richResponsesEnabled = false,
+): ChatMessage {
   return {
     id: crypto.randomUUID(),
     role: "user",
     createdAt: createTimestamp(),
-    content,
+    content: richResponsesEnabled ? `${content}\n\n${richResponseTurnRequirement}` : content,
     ...(attachments?.length ? { attachments } : {}),
   };
 }
@@ -60,6 +74,7 @@ function createSystemPrompt(
   userInstructions?: string,
   userProfile?: UserProfileContext,
   projectInstructions?: string,
+  richResponsesEnabled = false,
 ): string {
   const contextLines: string[] = [];
   const name = userProfile?.name?.trim();
@@ -79,6 +94,9 @@ function createSystemPrompt(
   if (projectContext) {
     contextLines.push(`Project instructions for ${conversation.projectName}: ${projectContext}`);
   }
+  if (richResponsesEnabled) {
+    contextLines.push(richResponsePrompt);
+  }
 
   return contextLines.length ? `${defaultSystemPrompt}\n\n${contextLines.join("\n")}` : defaultSystemPrompt;
 }
@@ -88,17 +106,21 @@ function createSystemMessage(
   userInstructions?: string,
   userProfile?: UserProfileContext,
   projectInstructions?: string,
+  richResponsesEnabled?: boolean,
 ): ChatMessage {
   return {
     id: "navi-system-latest-message",
     role: "system",
     createdAt: createTimestamp(),
-    content: createSystemPrompt(conversation, userInstructions, userProfile, projectInstructions),
+    content: createSystemPrompt(conversation, userInstructions, userProfile, projectInstructions, richResponsesEnabled),
   };
 }
 
 function isInternalFailureMessage(content: string): boolean {
-  return content.startsWith("The provider request failed");
+  return (
+    content.startsWith("The provider request failed") ||
+    content.startsWith("The provider did not return a complete Rich Response")
+  );
 }
 
 function isProviderContextMessage(message: ChatMessage): boolean {
@@ -120,10 +142,11 @@ export function createProviderMessages(
   userInstructions?: string,
   userProfile?: UserProfileContext,
   projectInstructions?: string,
+  richResponsesEnabled?: boolean,
 ): ChatMessage[] {
   return [
-    createSystemMessage(conversation, userInstructions, userProfile, projectInstructions),
+    createSystemMessage(conversation, userInstructions, userProfile, projectInstructions, richResponsesEnabled),
     ...conversation.messages.filter(isProviderContextMessage),
-    createUserMessage(input, attachments),
+    createUserMessage(input, attachments, richResponsesEnabled),
   ];
 }

@@ -128,6 +128,16 @@ describe("extractArtifactsFromMessage", () => {
     expect(extractArtifactsFromMessage({ ...assistantMessage("m4", "plain text") })).toEqual([]);
     expect(extractArtifactsFromMessage({ ...assistantMessage("m5", "```python\nx=1\n```"), role: "user" })).toEqual([]);
   });
+
+  test("keeps inline rich responses out of the artifact canvas", () => {
+    const message = assistantMessage(
+      "m-rich",
+      "```navi-rich\n<section data-navi='card'><h2>Inline</h2></section>\n```",
+    );
+
+    expect(extractArtifactsFromMessage(message)).toEqual([]);
+    expect(extractArtifactsFromMessage(assistantMessage("m-rich-svg", "```navi-rich\n<svg></svg>\n```"))).toEqual([]);
+  });
 });
 
 describe("artifact revision history", () => {

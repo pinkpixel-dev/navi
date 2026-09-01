@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.1.0 - August 31, 2026
+
+### 💬 Rich responses
+
+- Assistant messages now render sanitized Markdown with headings, lists, links, tables, blockquotes, and highlighted fenced code.
+- Added a prominent Rich Responses mode that is on by default. When enabled, the provider must wrap every conversational answer in Navi's restricted visual format instead of choosing between rich output and normal Markdown.
+- Kept all provider output behind `Thinking...` while Rich Responses is on, then displayed the completed response at once.
+- Reinforced the rich format next to the current user turn because some smaller models ignored a system-only instruction.
+- Rejected Markdown-only provider results while Rich Responses is on and showed a clear retry or settings message instead of treating Markdown as success.
+- Fixed valid rich responses that started with `h3` or `h4` being rejected before any earlier heading existed.
+- Added visible pending and formatting-error states for incomplete or invalid rich blocks, with the original source preserved for review.
+
+### 🔒 Safety and accessibility
+
+- Restricted rich output to an exact semantic allowlist with limits for source size, elements, nesting, tables, code blocks, and blocks per message.
+- Blocked scripts, event handlers, forms, embedded content, unsafe links, remote resources, inline styles, SVG, and unknown Navi markers from inline responses.
+- Added responsive layouts, keyboard focus styles, keyboard-operable disclosures, and visible callout labels.
+
+### 🧭 Canvas behavior
+
+- Kept `navi-rich` fences out of the artifact canvas while preserving existing HTML, SVG, Mermaid, Markdown, and code artifact behavior.
+
+### 🏷️ Versioning
+
+- Updated npm, Tauri, and Cargo metadata to `1.1.0`.
+
 ## 1.0.1 - August 31, 2026
 
 ### 🐛 Canvas artifacts
