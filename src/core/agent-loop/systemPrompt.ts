@@ -1,5 +1,4 @@
 import type { ChatMessage, Conversation, MessageAttachment } from "../conversation/types";
-import { richResponsePrompt } from "../rich-response/richResponsePrompt";
 
 export interface UserProfileContext {
   name?: string;
@@ -15,6 +14,7 @@ const internalAssistantMessages = new Set([
 
 const artifactProtocol = [
   "When generating standalone HTML, SVG, Mermaid, Markdown documents, or code intended as an artifact, always wrap the complete artifact in a fenced code block with the correct language identifier. Do not output artifact source as unfenced plain text.",
+  "Use a fenced Markdown block only when the user explicitly asks for a document, file, artifact, download, or canvas output. Never wrap an ordinary conversational answer in a Markdown fence.",
   "Explanatory text may appear before or after the fenced artifact, but the artifact itself must be entirely contained within the fence.",
   [
     "For HTML:",
@@ -39,32 +39,20 @@ const artifactProtocol = [
 
 const defaultSystemPrompt = [
   "Answer the user's latest message directly. Use earlier messages and attachments only as context when they are relevant or when the user asks about them. Do not summarize or answer earlier attachments unless the latest message asks for that.",
+  "Write conversational answers as clean, unfenced Markdown. Never wrap a conversational answer in a Markdown code fence. For explanations and comparisons, use a descriptive heading, a short introduction, section headings, lists, and tables when they improve readability.",
   artifactProtocol,
 ].join("\n\n");
-
-const richResponseTurnRequirement = [
-  "<navi_response_format>",
-  "Rich Responses is on for this turn.",
-  "Return the complete conversational answer inside one fenced navi-rich block.",
-  "Start the answer with ```navi-rich and end that block with ```.",
-  "Do not return ordinary Markdown or plain text instead.",
-  "</navi_response_format>",
-].join("\n");
 
 function createTimestamp(): string {
   return new Date().toISOString();
 }
 
-function createUserMessage(
-  content: string,
-  attachments?: MessageAttachment[],
-  richResponsesEnabled = false,
-): ChatMessage {
+function createUserMessage(content: string, attachments?: MessageAttachment[]): ChatMessage {
   return {
     id: crypto.randomUUID(),
     role: "user",
     createdAt: createTimestamp(),
-    content: richResponsesEnabled ? `${content}\n\n${richResponseTurnRequirement}` : content,
+    content,
     ...(attachments?.length ? { attachments } : {}),
   };
 }
@@ -74,7 +62,6 @@ function createSystemPrompt(
   userInstructions?: string,
   userProfile?: UserProfileContext,
   projectInstructions?: string,
-  richResponsesEnabled = false,
 ): string {
   const contextLines: string[] = [];
   const name = userProfile?.name?.trim();
@@ -94,10 +81,6 @@ function createSystemPrompt(
   if (projectContext) {
     contextLines.push(`Project instructions for ${conversation.projectName}: ${projectContext}`);
   }
-  if (richResponsesEnabled) {
-    contextLines.push(richResponsePrompt);
-  }
-
   return contextLines.length ? `${defaultSystemPrompt}\n\n${contextLines.join("\n")}` : defaultSystemPrompt;
 }
 
@@ -106,21 +89,17 @@ function createSystemMessage(
   userInstructions?: string,
   userProfile?: UserProfileContext,
   projectInstructions?: string,
-  richResponsesEnabled?: boolean,
 ): ChatMessage {
   return {
     id: "navi-system-latest-message",
     role: "system",
     createdAt: createTimestamp(),
-    content: createSystemPrompt(conversation, userInstructions, userProfile, projectInstructions, richResponsesEnabled),
+    content: createSystemPrompt(conversation, userInstructions, userProfile, projectInstructions),
   };
 }
 
 function isInternalFailureMessage(content: string): boolean {
-  return (
-    content.startsWith("The provider request failed") ||
-    content.startsWith("The provider did not return a complete Rich Response")
-  );
+  return content.startsWith("The provider request failed");
 }
 
 function isProviderContextMessage(message: ChatMessage): boolean {
@@ -142,11 +121,10 @@ export function createProviderMessages(
   userInstructions?: string,
   userProfile?: UserProfileContext,
   projectInstructions?: string,
-  richResponsesEnabled?: boolean,
 ): ChatMessage[] {
   return [
-    createSystemMessage(conversation, userInstructions, userProfile, projectInstructions, richResponsesEnabled),
+    createSystemMessage(conversation, userInstructions, userProfile, projectInstructions),
     ...conversation.messages.filter(isProviderContextMessage),
-    createUserMessage(input, attachments, richResponsesEnabled),
+    createUserMessage(input, attachments),
   ];
 }

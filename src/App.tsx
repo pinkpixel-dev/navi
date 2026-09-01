@@ -725,7 +725,6 @@ export default function App() {
         bio: appSettings.userBio,
       },
       projectInstructions: activeProject?.instructions,
-      richResponsesEnabled: appSettings.richResponsesEnabled,
       signal: controller.signal,
       retry: {
         maxAttempts: 2,

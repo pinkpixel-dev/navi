@@ -12,7 +12,6 @@ export interface AppSettings {
   userName?: string;
   userBio?: string;
   userInstructions?: string;
-  richResponsesEnabled?: boolean;
   projects?: ProjectSettings[];
   customLlamaServerPath?: string;
   localRuntimeAcceleration?: "auto" | "cpu" | "cuda" | "vulkan" | "rocm" | "sycl";
@@ -26,7 +25,6 @@ export const defaultAppSettings: AppSettings = {
   submitShortcut: "enter",
   themeMode: "dark",
   accentColor: "blue",
-  richResponsesEnabled: true,
 };
 
 const appSettingsStorageKey = "navi.appSettings";

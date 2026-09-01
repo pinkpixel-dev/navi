@@ -16,8 +16,6 @@ const accentColorOptions: { value: AccentColor; label: string }[] = [
 ];
 
 export function GeneralSettings({ appSettings, onChange }: GeneralSettingsProps) {
-  const richResponsesEnabled = appSettings.richResponsesEnabled ?? true;
-
   return (
     <div className="settings-form settings-general">
       <h3>General</h3>
@@ -51,27 +49,6 @@ export function GeneralSettings({ appSettings, onChange }: GeneralSettingsProps)
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}
         </select>
-      </label>
-      <label
-        className={richResponsesEnabled ? "settings-checkbox-row enabled" : "settings-checkbox-row"}
-      >
-        <input
-          type="checkbox"
-          checked={richResponsesEnabled}
-          onChange={(event) => onChange({ ...appSettings, richResponsesEnabled: event.target.checked })}
-        />
-        <span className="settings-checkbox-copy">
-          <span className="settings-checkbox-heading">
-            <strong>Rich Responses</strong>
-            <span className="settings-checkbox-status">
-              {richResponsesEnabled ? "On" : "Off"}
-            </span>
-          </span>
-          <small>
-            Require every assistant answer to use Navi's restricted visual format. Turn this off for normal Markdown
-            responses.
-          </small>
-        </span>
       </label>
     </div>
   );

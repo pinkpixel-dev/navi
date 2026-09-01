@@ -2,21 +2,23 @@
 
 ## 1.1.0 - August 31, 2026
 
-### 💬 Rich responses
+### 💬 Rich Markdown responses
 
 - Assistant messages now render sanitized Markdown with headings, lists, links, tables, blockquotes, and highlighted fenced code.
-- Added a prominent Rich Responses mode that is on by default. When enabled, the provider must wrap every conversational answer in Navi's restricted visual format instead of choosing between rich output and normal Markdown.
-- Kept all provider output behind `Thinking...` while Rich Responses is on, then displayed the completed response at once.
-- Reinforced the rich format next to the current user turn because some smaller models ignored a system-only instruction.
-- Rejected Markdown-only provider results while Rich Responses is on and showed a clear retry or settings message instead of treating Markdown as success.
-- Fixed valid rich responses that started with `h3` or `h4` being rejected before any earlier heading existed.
-- Added visible pending and formatting-error states for incomplete or invalid rich blocks, with the original source preserved for review.
+- Added a Navi-owned presentation layer that turns structured Markdown headings into a response introduction and stacked section cards.
+- Styled Markdown tables, blockquotes, code, and nested headings to match the card layout across desktop and mobile widths.
+- Fixed the hidden-sidebar mobile grid so chat uses the full width at 320px, 375px, and 414px.
+- Added one short provider instruction that favors descriptive headings, introductions, sections, lists, and tables when they improve an answer.
+- Reserved fenced Markdown for explicitly requested documents and canvas artifacts so normal chat answers stay in the card renderer.
+- Removed the Rich Responses setting and the required `navi-rich` provider protocol after GPT-5 Nano repeatedly ignored the custom format.
+- Restored normal token streaming for every new assistant response.
+- Kept legacy `navi-rich` rendering so saved experiment conversations remain readable.
 
 ### 🔒 Safety and accessibility
 
-- Restricted rich output to an exact semantic allowlist with limits for source size, elements, nesting, tables, code blocks, and blocks per message.
-- Blocked scripts, event handlers, forms, embedded content, unsafe links, remote resources, inline styles, SVG, and unknown Navi markers from inline responses.
-- Added responsive layouts, keyboard focus styles, keyboard-operable disclosures, and visible callout labels.
+- Sanitized Markdown before rendering and kept model-authored HTML inert inside ordinary responses.
+- Preserved safe external-link checks, escaped code highlighting, keyboard focus styles, and bounded table and code layouts.
+- Retained the restricted legacy renderer for stored `navi-rich` messages.
 
 ### 🧭 Canvas behavior
 

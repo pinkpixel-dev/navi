@@ -15,7 +15,6 @@ export type MessageContentBlock =
 
 const openingFencePattern = /^```navi-rich[ \t]*\r?$/gm;
 const closingFencePattern = /^```[ \t]*\r?$/gm;
-const completeArtifactFencePattern = /^```(?!navi-rich[ \t]*$)[^\r\n]*\r?\n[\s\S]*?^```[ \t]*\r?$/gm;
 
 function appendMarkdown(blocks: MessageContentBlock[], source: string): void {
   if (source) {
@@ -72,23 +71,6 @@ export function parseMessageContent(content: string, isStreaming = false): Messa
 
   appendMarkdown(blocks, content.slice(cursor));
   return blocks.length ? blocks : [{ type: "markdown", source: content }];
-}
-
-export function hasCompleteRichResponse(content: string): boolean {
-  const blocks = parseMessageContent(content);
-  const richBlocks = blocks.filter((block) => block.type === "rich");
-  if (richBlocks.length !== 1 || blocks.some((block) => block.type === "rich-error")) {
-    return false;
-  }
-
-  return blocks.every((block) => {
-    if (block.type !== "markdown") {
-      return true;
-    }
-
-    completeArtifactFencePattern.lastIndex = 0;
-    return block.source.replace(completeArtifactFencePattern, "").trim().length === 0;
-  });
 }
 
 export function safeExternalUrl(value: string): string | null {

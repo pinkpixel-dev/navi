@@ -6,7 +6,6 @@ export type RunFailureReason =
   | "tool_call_limit_reached"
   | "model_step_limit_reached"
   | "provider_error"
-  | "invalid_response_format"
   | "timeout";
 
 export type RunCancellationReason = "user_cancelled";

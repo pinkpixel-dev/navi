@@ -1,42 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
-  hasCompleteRichResponse,
   maxRichBlocks,
   maxRichSourceLength,
   parseMessageContent,
   safeExternalUrl,
   validateRichHeadingLevels,
 } from "./richResponse";
-
-describe("hasCompleteRichResponse", () => {
-  test("accepts a complete rich block", () => {
-    expect(hasCompleteRichResponse("```navi-rich\n<section><h2>Hello</h2></section>\n```")).toBe(true);
-  });
-
-  test("rejects Markdown-only and unfinished rich responses", () => {
-    expect(hasCompleteRichResponse("## Hello\n\nThis is Markdown.")).toBe(false);
-    expect(hasCompleteRichResponse("```navi-rich\n<section>Incomplete</section>")).toBe(false);
-  });
-
-  test("rejects conversational text outside the single rich block", () => {
-    const richBlock = "```navi-rich\n<section><p>Hello</p></section>\n```";
-    expect(hasCompleteRichResponse(`Intro\n${richBlock}`)).toBe(false);
-    expect(hasCompleteRichResponse(`${richBlock}\nMore Markdown.`)).toBe(false);
-    expect(hasCompleteRichResponse(`${richBlock}\n${richBlock}`)).toBe(false);
-  });
-
-  test("allows a separate fenced canvas artifact after the rich answer", () => {
-    const response = [
-      "```navi-rich",
-      "<section><p>I made the page.</p></section>",
-      "```",
-      "```html",
-      "<!doctype html><html><body>Hello</body></html>",
-      "```",
-    ].join("\n");
-    expect(hasCompleteRichResponse(response)).toBe(true);
-  });
-});
 
 describe("parseMessageContent", () => {
   test("keeps Markdown around a complete rich block", () => {

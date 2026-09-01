@@ -2133,8 +2133,9 @@ button {
 }
 
 @media (max-width: 760px) {
-  .app-shell {
-    grid-template-columns: 1fr;
+  .app-shell,
+  .app-shell.canvas-collapsed {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .sidebar {

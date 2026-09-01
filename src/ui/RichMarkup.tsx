@@ -113,7 +113,10 @@ function nodeToReact(node: Node, key: string, isRich: boolean): ReactNode {
   const element = node as HTMLElement;
   const originalTag = element.tagName.toLowerCase();
   const tag = !isRich && originalTag === "h1" ? "h2" : originalTag;
-  const children = Array.from(element.childNodes).map((child, index) => nodeToReact(child, `${key}-${index}`, isRich));
+  const excludesWhitespace = ["table", "thead", "tbody", "tr"].includes(originalTag);
+  const children = Array.from(element.childNodes)
+    .filter((child) => !excludesWhitespace || child.nodeType !== Node.TEXT_NODE || Boolean(child.textContent?.trim()))
+    .map((child, index) => nodeToReact(child, `${key}-${index}`, isRich));
   const props: Record<string, unknown> = { key };
 
   if (isRich) {
@@ -150,12 +153,72 @@ function nodeToReact(node: Node, key: string, isRich: boolean): ReactNode {
   return createElement(tag, props, children);
 }
 
-export function RichMarkup({ source, isRich = false }: { source: string; isRich?: boolean }) {
+export interface MarkdownPresentation {
+  intro: string;
+  sections: string[];
+}
+
+export function planMarkdownPresentation(source: string): MarkdownPresentation | null {
+  const tokens = marked.lexer(source);
+  const headings = tokens.flatMap((token, index) => {
+    return token.type === "heading" ? [{ index, level: token.depth }] : [];
+  });
+  const firstHeading = headings[0];
+  if (!firstHeading) {
+    return null;
+  }
+  const firstSectionHeading = headings.find((heading) => heading.index > firstHeading.index);
+  if (!firstSectionHeading) {
+    return null;
+  }
+
+  const sectionStarts = headings.filter(
+    (heading) => heading.index >= firstSectionHeading.index && heading.level === firstSectionHeading.level,
+  );
+  const intro = tokens.slice(0, sectionStarts[0].index).map((token) => token.raw).join("");
+  const sections = sectionStarts.map((section, index) => {
+    const end = sectionStarts[index + 1]?.index ?? tokens.length;
+    return tokens.slice(section.index, end).map((token) => token.raw).join("");
+  });
+
+  return { intro, sections };
+}
+
+export function RichMarkup({
+  source,
+  isRich = false,
+  usePresentation = true,
+}: {
+  source: string;
+  isRich?: boolean;
+  usePresentation?: boolean;
+}) {
+  const presentation = !isRich && usePresentation ? planMarkdownPresentation(source) : null;
+  if (presentation) {
+    return (
+      <div className="rich-markdown-response structured">
+        <header className="rich-markdown-intro">
+          <RichMarkup source={presentation.intro} usePresentation={false} />
+        </header>
+        <div className="rich-markdown-sections">
+          {presentation.sections.map((section, index) => (
+            <section className="rich-markdown-card" key={`section-${index}`}>
+              <RichMarkup source={section} usePresentation={false} />
+            </section>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   const rendered = renderFragment(source, isRich);
   if (rendered.error) {
     return <RichFormattingError message={rendered.error} source={source} />;
   }
-  return <Fragment>{Array.from(rendered.fragment.childNodes).map((node, index) => nodeToReact(node, `node-${index}`, isRich))}</Fragment>;
+  if (!isRich) {
+    return <div className="rich-markdown-response">{Array.from(rendered.fragment.childNodes).map((node, index) => nodeToReact(node, `node-${index}`, false))}</div>;
+  }
+  return <Fragment>{Array.from(rendered.fragment.childNodes).map((node, index) => nodeToReact(node, `node-${index}`, true))}</Fragment>;
 }
 
 export function RichFormattingError({ message, source }: { message: string; source: string }) {

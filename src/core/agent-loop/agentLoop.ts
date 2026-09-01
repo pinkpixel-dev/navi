@@ -1,7 +1,5 @@
 import type { ChatMessage, Conversation, MessageAttachment, ToolCallEvent } from "../conversation/types";
 import type { ProviderCompleteInput, ProviderResponse, ProviderToolSchema } from "../providers/types";
-import { hasCompleteRichResponse } from "../rich-response/richResponse";
-import { failInvalidRichResponse } from "./richResponseRun";
 import { createProviderMessages, type UserProfileContext } from "./systemPrompt";
 import type { AgentRunResult, ApprovalDecision, ApprovalPolicy, RunEvent, RunLimits, RunRetryPolicy } from "./types";
 
@@ -17,7 +15,6 @@ interface RunAgentLoopInput {
   userInstructions?: string;
   userProfile?: UserProfileContext;
   projectInstructions?: string;
-  richResponsesEnabled?: boolean;
   approvalPolicy?: ApprovalPolicy;
   limits?: RunLimits;
   retry?: RunRetryPolicy;
@@ -124,7 +121,6 @@ export async function runAgentLoop({
   userInstructions,
   userProfile,
   projectInstructions,
-  richResponsesEnabled,
   approvalPolicy = "allow-all",
   limits = defaultLimits,
   retry = { maxAttempts: 1 },
@@ -174,7 +170,6 @@ export async function runAgentLoop({
     userInstructions,
     userProfile,
     projectInstructions,
-    richResponsesEnabled,
   );
   const seedLength = workingMessages.length;
   const allToolCalls: ToolCallEvent[] = [];
@@ -202,9 +197,6 @@ export async function runAgentLoop({
               tools,
               onDelta: (delta) => {
                 streamedAnyDelta = true;
-                if (richResponsesEnabled) {
-                  return;
-                }
                 record({
                   id: createEventId(),
                   type: "assistant_text_delta",
@@ -324,19 +316,7 @@ export async function runAgentLoop({
     }
 
     if (response.toolCalls.length === 0) {
-      if (richResponsesEnabled && !hasCompleteRichResponse(response.message.content)) {
-        return failInvalidRichResponse({
-          runId,
-          transcript: workingMessages.slice(seedLength),
-          events,
-          record,
-          createEventId,
-          createTimestamp,
-          createMessage: createFallbackMessage,
-        });
-      }
-
-      if (!richResponsesEnabled && !streamedAnyDelta) {
+      if (!streamedAnyDelta) {
         record({
           id: createEventId(),
           type: "assistant_text_delta",
