@@ -1,0 +1,48 @@
+- main [ref=e3]:
+  - complementary [ref=e4]:
+    - strong [ref=e7]: Navi
+    - button "New chat" [ref=e8] [cursor=pointer]
+    - textbox [ref=e15]:
+      - /placeholder: Search chats and messages
+    - generic [ref=e17]:
+      - heading "Projects" [level=2] [ref=e18]
+      - button "Create project" [ref=e19] [cursor=pointer]
+    - generic [ref=e22]:
+      - heading "Chats" [level=2] [ref=e23]
+      - generic [ref=e61]:
+        - button "Sidebar menu verification Just now" [ref=e62] [cursor=pointer]:
+          - generic [ref=e63]: Sidebar menu verification
+          - generic: Just now
+        - generic [ref=e64]:
+          - button "Open actions for Sidebar menu verification" [expanded] [active] [ref=e65] [cursor=pointer]
+          - menu [ref=e85]:
+            - menuitem "Rename" [ref=e86] [cursor=pointer]
+            - menuitem "Pin" [ref=e90] [cursor=pointer]
+            - menuitem "Archive" [ref=e93] [cursor=pointer]
+            - menuitem "Delete" [ref=e97] [cursor=pointer]
+    - button "Settings" [ref=e24] [cursor=pointer]
+    - separator "Resize sidebar" [ref=e28]
+  - generic [ref=e29]:
+    - generic [ref=e30]:
+      - generic [ref=e31]:
+        - heading "Sidebar menu verification" [level=1] [ref=e70]
+        - generic [ref=e33]:
+          - combobox "Active provider" [disabled] [ref=e34]:
+            - option "No providers" [selected]
+          - combobox "Active model" [disabled] [ref=e35]:
+            - option "No models" [selected]
+      - generic [ref=e36]:
+        - button "Open actions for Sidebar menu verification" [ref=e71] [cursor=pointer]
+        - button "Open canvas" [ref=e43] [cursor=pointer]
+    - generic [ref=e47]:
+      - article [ref=e72]:
+        - img "user" [ref=e74]
+        - paragraph [ref=e75]: Sidebar menu verification
+      - article [ref=e76]:
+        - img "assistant" [ref=e78]
+        - paragraph [ref=e81]: Add or select a provider in Settings before sending a message.
+    - generic [ref=e52]:
+      - button "Attach files" [ref=e53] [cursor=pointer]
+      - textbox "Message" [ref=e56]:
+        - /placeholder: Ask anything...
+      - button [disabled] [ref=e57]

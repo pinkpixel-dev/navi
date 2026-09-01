@@ -7,6 +7,7 @@ import { SettingsPanel } from "./ui/SettingsPanel";
 import { confirmDestructiveAction } from "./ui/confirmDialog";
 import { seedConversations } from "./core/conversation/seed";
 import type { Conversation, ChatMessage, MessageAttachment, ToolCallEvent } from "./core/conversation/types";
+import { hasConversationContent, replaceConversationDraft } from "./core/conversation/conversationDraft";
 import { generateConversationTitle } from "./core/conversation/conversationTitle";
 import { presetForServerId } from "./core/tools/mcpToolPresets";
 import { runAgentLoop } from "./core/agent-loop/agentLoop";
@@ -196,9 +197,13 @@ export default function App() {
     () => availableModels.find((model) => model.id === activeConversation.model),
     [activeConversation.model, availableModels],
   );
+  const savedConversations = useMemo(
+    () => conversations.filter(hasConversationContent),
+    [conversations],
+  );
   const projects = useMemo(
-    () => mergeProjectSettings(appSettings.projects ?? [], conversations),
-    [appSettings.projects, conversations],
+    () => mergeProjectSettings(appSettings.projects ?? [], savedConversations),
+    [appSettings.projects, savedConversations],
   );
   const activeProject = useMemo(
     () => projects.find((project) => project.name === activeConversation.projectName) ?? null,
@@ -217,11 +222,11 @@ export default function App() {
     return {
       project,
       projects,
-      conversations: conversations.filter(
+      conversations: savedConversations.filter(
         (conversation) => !conversation.isArchived && conversation.projectName === project.name,
       ),
     };
-  }, [conversations, projectHomeName, projects]);
+  }, [projectHomeName, projects, savedConversations]);
 
   const toolRoute = useMemo(() => {
     const route = new Map<string, { serverId: string; serverName: string }>();
@@ -268,10 +273,16 @@ export default function App() {
           return;
         }
 
-        const savedConversations = snapshots.map((snapshot) => snapshot.conversation);
-        conversationsRef.current = savedConversations;
-        setConversations(savedConversations);
-        setActiveConversationId(savedConversations[0].id);
+        const loadedConversations = snapshots
+          .map((snapshot) => snapshot.conversation)
+          .filter(hasConversationContent);
+        if (!loadedConversations.length) {
+          return;
+        }
+
+        conversationsRef.current = loadedConversations;
+        setConversations(loadedConversations);
+        setActiveConversationId(loadedConversations[0].id);
       })
       .catch((error: unknown) => {
         console.error("Could not load saved conversations", error);
@@ -416,6 +427,12 @@ export default function App() {
     });
   };
 
+  const saveConversationMetadata = (conversation: Conversation, errorMessage: string) => {
+    conversationRepository.updateConversationMetadata(conversation).catch((error: unknown) => {
+      console.error(errorMessage, error);
+    });
+  };
+
   const updateConversationList = (updater: (current: Conversation[]) => Conversation[]): Conversation[] => {
     const nextConversations = updater(conversationsRef.current);
     conversationsRef.current = nextConversations;
@@ -521,14 +538,11 @@ export default function App() {
       : undefined;
     const conversation = createBlankConversation(preferredModel, projectName);
 
-    updateConversationList((current) => [conversation, ...current]);
+    updateConversationList((current) => replaceConversationDraft(current, conversation));
     setActiveConversationId(conversation.id);
     setActiveProjectName(projectName ?? null);
     setProjectHomeName(null);
     dispatchRunState({ type: "reset" });
-    saveConversationSnapshot(conversation, [], []).catch((error: unknown) => {
-      console.error("Could not save new conversation", error);
-    });
   };
 
   const handleCreateProject = (name: string) => {
@@ -571,9 +585,7 @@ export default function App() {
       );
 
       for (const conversation of updatedConversations.filter((current) => current.projectName === trimmedName)) {
-        conversationRepository.updateConversationMetadata(conversation).catch((error: unknown) => {
-          console.error("Could not save renamed project chat", error);
-        });
+        saveConversationMetadata(conversation, "Could not save renamed project chat");
       }
 
       if (activeProjectName === previousProject.name) {
@@ -619,9 +631,7 @@ export default function App() {
     );
 
     for (const conversation of updatedConversations.filter((current) => movedConversationIds.has(current.id))) {
-      conversationRepository.updateConversationMetadata(conversation).catch((error: unknown) => {
-        console.error("Could not save project removal for chat", error);
-      });
+      saveConversationMetadata(conversation, "Could not save project removal for chat");
     }
 
     if (activeProjectName === project.name) {
@@ -657,9 +667,7 @@ export default function App() {
 
     const updated: Conversation = { ...target, projectName: nextProjectName, updatedAt: new Date().toISOString() };
     updateConversationList((current) => current.map((conversation) => (conversation.id === conversationId ? updated : conversation)));
-    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
-      console.error("Could not save moved conversation", error);
-    });
+    saveConversationMetadata(updated, "Could not save moved conversation");
   };
 
   const handleSend = async (content: string, attachments?: MessageAttachment[]) => {
@@ -791,9 +799,6 @@ export default function App() {
       const replacement = createBlankConversation(preferredModel);
       updateConversationList(() => [replacement]);
       setActiveConversationId(replacement.id);
-      saveConversationSnapshot(replacement, [], []).catch((error: unknown) => {
-        console.error("Could not save replacement conversation", error);
-      });
     } else {
       updateConversationList(() => remaining);
       if (id === activeConversationId) {
@@ -815,9 +820,7 @@ export default function App() {
 
     const updated: Conversation = { ...target, isPinned: !target.isPinned, updatedAt: new Date().toISOString() };
     updateConversationList((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
-    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
-      console.error("Could not save pin state", error);
-    });
+    saveConversationMetadata(updated, "Could not save pin state");
   };
 
   const handleToggleArchive = (id: string) => {
@@ -828,9 +831,7 @@ export default function App() {
 
     const updated: Conversation = { ...target, isArchived: !target.isArchived };
     updateConversationList((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
-    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
-      console.error("Could not save archive state", error);
-    });
+    saveConversationMetadata(updated, "Could not save archive state");
   };
 
   const handleRenameConversation = (id: string, title: string) => {
@@ -846,9 +847,7 @@ export default function App() {
 
     const updated: Conversation = { ...target, title: trimmed };
     updateConversationList((current) => current.map((conversation) => (conversation.id === id ? updated : conversation)));
-    conversationRepository.updateConversationMetadata(updated).catch((error: unknown) => {
-      console.error("Could not save renamed conversation", error);
-    });
+    saveConversationMetadata(updated, "Could not save renamed conversation");
   };
 
   const handleModelChange = (model: ProviderModel) => {
@@ -886,7 +885,7 @@ export default function App() {
       <Sidebar
         activeConversationId={activeConversation.id}
         activeProjectName={activeProjectName}
-        conversations={conversations}
+        conversations={savedConversations}
         projects={projects}
         onNewChat={handleNewChat}
         onCreateProject={handleCreateProject}

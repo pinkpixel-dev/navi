@@ -65,4 +65,16 @@ describe("conversation repository", () => {
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0].conversation.id).toBe("chat-2");
   });
+
+  test("does not persist an empty conversation draft", async () => {
+    const repository = createConversationRepository(createMemoryPersistenceDriver());
+
+    await repository.saveConversation({
+      conversation: { ...conversation, id: "empty-chat", title: "New chat", messages: [] },
+      runEvents: [],
+      artifacts: [],
+    });
+
+    expect(await repository.loadConversations()).toEqual([]);
+  });
 });

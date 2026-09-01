@@ -74,13 +74,14 @@ export function ChatActionsMenu({
         className="chat-row-more-button"
         type="button"
         aria-label={`Open actions for ${conversation.title}`}
+        title={`Chat actions for ${conversation.title}`}
         aria-expanded={isOpen}
         onClick={(event) => {
           event.stopPropagation();
           setIsOpen((current) => !current);
         }}
       >
-        <MoreHorizontal size={14} />
+        <MoreHorizontal size={16} />
       </button>
       {isOpen ? (
         <div className="chat-action-popover" role="menu">

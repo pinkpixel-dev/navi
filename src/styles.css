@@ -307,6 +307,7 @@ button {
 .nav-section {
   display: grid;
   gap: 8px;
+  min-width: 0;
 }
 
 .nav-section-header {
@@ -338,7 +339,8 @@ button {
   flex: 1 1 0%;
   flex-shrink: 1;
   min-height: 0px;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .nav-section h2 {
@@ -463,6 +465,8 @@ button {
   display: flex;
   align-items: center;
   gap: 2px;
+  width: 100%;
+  min-width: 0;
   min-height: 32px;
   overflow: visible;
   border-radius: 6px;
@@ -518,7 +522,7 @@ button {
 
 .chat-row-actions {
   position: absolute;
-  right: 6px;
+  right: 4px;
   top: 50%;
   z-index: 2;
   transform: translateY(-50%);
@@ -534,17 +538,20 @@ button {
   background: linear-gradient(90deg, transparent, var(--surface-raised) 18px);
 }
 
+.chat-row.active .chat-row-actions,
 .chat-row:hover .chat-row-actions,
 .chat-row:focus-within .chat-row-actions {
   opacity: 1;
   pointer-events: auto;
 }
 
+.chat-row.active .chat-row-select,
 .chat-row:hover .chat-row-select,
 .chat-row:focus-within .chat-row-select {
-  padding-right: 34px;
+  padding-right: 38px;
 }
 
+.chat-row.active .chat-row-select small,
 .chat-row:hover .chat-row-select small,
 .chat-row:focus-within .chat-row-select small {
   width: 0;
@@ -577,8 +584,19 @@ button {
   color: var(--accent);
 }
 
-.chat-row-more-button {
-  background: var(--surface-raised);
+.chat-row-actions > .chat-row-more-button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.chat-row-actions > .chat-row-more-button:hover,
+.chat-row-actions > .chat-row-more-button:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .chat-action-popover {

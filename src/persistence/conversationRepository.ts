@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Artifact } from "../canvas/artifacts";
 import type { RunEvent } from "../core/agent-loop/types";
+import { hasConversationContent } from "../core/conversation/conversationDraft";
 import type { Conversation } from "../core/conversation/types";
 
 export interface ConversationSnapshot {
@@ -27,9 +28,13 @@ export interface ConversationRepository {
 export function createConversationRepository(driver: PersistenceDriver): ConversationRepository {
   return {
     loadConversations: () => driver.loadConversationSnapshots(),
-    saveConversation: (snapshot) => driver.saveConversationSnapshot(snapshot),
+    saveConversation: (snapshot) => hasConversationContent(snapshot.conversation)
+      ? driver.saveConversationSnapshot(snapshot)
+      : Promise.resolve(),
     deleteConversation: (id) => driver.deleteConversationSnapshot(id),
-    updateConversationMetadata: (conversation) => driver.updateConversationMetadata(conversation),
+    updateConversationMetadata: (conversation) => hasConversationContent(conversation)
+      ? driver.updateConversationMetadata(conversation)
+      : Promise.resolve(),
   };
 }
 

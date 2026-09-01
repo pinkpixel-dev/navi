@@ -24,6 +24,13 @@
 
 - Kept `navi-rich` fences out of the artifact canvas while preserving existing HTML, SVG, Mermaid, Markdown, and code artifact behavior.
 
+### 🗂️ Chat management
+
+- Kept empty New Chat drafts out of the sidebar and persistence until the conversation has a message.
+- Replaced the current empty draft when New Chat is clicked again instead of collecting duplicate drafts.
+- Kept the active chat's action menu visible and retained hover and keyboard access for other sidebar chats.
+- Added a tooltip to the sidebar chat action button. The menu includes rename, pin, archive, project moves, and delete.
+
 ### 🏷️ Versioning
 
 - Updated npm, Tauri, and Cargo metadata to `1.1.0`.
