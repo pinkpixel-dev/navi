@@ -22,6 +22,7 @@ import {
   type McpTransport,
 } from "../core/mcp/mcpServer";
 import {
+  activePresetOptions,
   buildPresetMcpServerConfig,
   mcpToolPresets,
   missingRequiredPresetOptions,
@@ -1310,6 +1311,7 @@ export function SettingsPanel({
                 {mcpToolPresets.map((preset) => {
                   const server = getPresetServer(preset);
                   const values = valuesFromPresetServerConfig(preset, server);
+                  const visibleOptions = activePresetOptions(preset, values);
                   const isEnabled = Boolean(server?.enabled);
                   const isConnected = mcpConnections[presetServerId(preset.id)]?.state === "connected";
                   return (
@@ -1329,9 +1331,9 @@ export function SettingsPanel({
                         </button>
                       </div>
                       <span>{preset.description}</span>
-                      {preset.options.length ? (
+                      {visibleOptions.length ? (
                         <div className="settings-preset-options">
-                          {preset.options.map((option) => (
+                          {visibleOptions.map((option) => (
                             <label key={option.key}>
                               <span>{option.label}</span>
                               {option.type === "select" ? (

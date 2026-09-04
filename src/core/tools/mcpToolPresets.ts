@@ -7,7 +7,12 @@ export type McpToolPresetId =
   | "datetime"
   | "memory"
   | "context7"
-  | "pixara";
+  | "image-generation";
+
+/** Server ids written by versions that shipped the OpenRouter-only image tool. */
+export const legacyPresetServerIds: Record<string, McpToolPresetId> = {
+  "preset:pixara": "image-generation",
+};
 
 export type McpToolPresetOptionType = "text" | "password" | "select" | "directory" | "file";
 
@@ -19,6 +24,16 @@ export interface McpToolPresetOption {
   required: boolean;
   placeholder?: string;
   options?: Array<{ value: string; label: string }>;
+  /**
+   * Limits the option to certain values of another option. A hidden option is
+   * never shown, never required, and never written to the server environment.
+   */
+  showWhen?: { key: string; values: string[] };
+}
+
+export interface McpToolPresetRuntime {
+  command: string;
+  args: string[];
 }
 
 export interface McpToolPreset {
@@ -29,6 +44,13 @@ export interface McpToolPreset {
   args: string[];
   defaultEnv?: Record<string, string>;
   options: McpToolPresetOption[];
+  /**
+   * Lets one preset card run different packages. The value of `runtimeOptionKey`
+   * selects an entry in `runtimes`; anything unmatched falls back to the preset's
+   * own `command` and `args`.
+   */
+  runtimeOptionKey?: string;
+  runtimes?: Record<string, McpToolPresetRuntime>;
 }
 
 export type McpToolPresetValues = Record<string, string>;
@@ -131,31 +153,100 @@ export const mcpToolPresets: McpToolPreset[] = [
     ],
   },
   {
-    id: "pixara",
+    id: "image-generation",
     name: "Image Generation",
-    description: "Generate and edit images through Pixara with OpenRouter.",
+    description: "Generate and edit images with OpenRouter, OpenAI, or Google Gemini.",
+    // Default runtime. `runtimes` swaps the package once a provider is chosen.
     command: "npx",
     args: ["-y", "@pinkpixel/pixara-mcp"],
+    runtimeOptionKey: "provider",
+    runtimes: {
+      openrouter: { command: "npx", args: ["-y", "@pinkpixel/pixara-mcp"] },
+      openai: { command: "npx", args: ["-y", "@pinkpixel/imaginate-mcp"] },
+      gemini: { command: "npx", args: ["-y", "@pinkpixel/imaginate-mcp"] },
+    },
     options: [
       {
-        key: "apiKey",
+        key: "provider",
+        label: "Image provider",
+        envKey: "NAVI_IMAGE_PROVIDER",
+        type: "select",
+        required: true,
+        options: [
+          { value: "openrouter", label: "OpenRouter" },
+          { value: "openai", label: "OpenAI" },
+          { value: "gemini", label: "Google Gemini" },
+        ],
+      },
+      {
+        key: "openrouterApiKey",
         label: "OpenRouter API key",
         envKey: "OPENROUTER_API_KEY",
         type: "password",
         required: true,
         placeholder: "sk-or-...",
+        showWhen: { key: "provider", values: ["openrouter"] },
       },
       {
-        key: "outputDirectory",
+        key: "openaiApiKey",
+        label: "OpenAI API key",
+        envKey: "OPENAI_API_KEY",
+        type: "password",
+        required: true,
+        placeholder: "sk-...",
+        showWhen: { key: "provider", values: ["openai"] },
+      },
+      {
+        key: "geminiApiKey",
+        label: "Gemini API key",
+        envKey: "GEMINI_API_KEY",
+        type: "password",
+        required: true,
+        placeholder: "AIza...",
+        showWhen: { key: "provider", values: ["gemini"] },
+      },
+      {
+        key: "openrouterOutputDirectory",
         label: "Image output directory",
         envKey: "OPENROUTER_IMAGE_OUTPUT_DIR",
         type: "directory",
         required: true,
         placeholder: "/path/to/saved/images",
+        showWhen: { key: "provider", values: ["openrouter"] },
+      },
+      {
+        key: "imaginateOutputDirectory",
+        label: "Image output directory (optional)",
+        envKey: "IMAGINATE_OUTPUT_DIR",
+        type: "directory",
+        required: false,
+        placeholder: "~/Pictures/imaginate",
+        showWhen: { key: "provider", values: ["openai", "gemini"] },
       },
     ],
   },
 ];
+
+/** True when the option applies to the currently selected values. */
+export function isPresetOptionActive(option: McpToolPresetOption, values: McpToolPresetValues): boolean {
+  if (!option.showWhen) {
+    return true;
+  }
+  return option.showWhen.values.includes(values[option.showWhen.key] ?? "");
+}
+
+export function activePresetOptions(
+  preset: McpToolPreset,
+  values: McpToolPresetValues,
+): McpToolPresetOption[] {
+  return preset.options.filter((option) => isPresetOptionActive(option, values));
+}
+
+export function resolvePresetRuntime(preset: McpToolPreset, values: McpToolPresetValues): McpToolPresetRuntime {
+  const selected = preset.runtimeOptionKey ? values[preset.runtimeOptionKey] : undefined;
+  const runtime = selected ? preset.runtimes?.[selected] : undefined;
+  return runtime ?? { command: preset.command, args: preset.args };
+}
 
 export function presetServerId(presetId: McpToolPresetId): string {
   return `preset:${presetId}`;
@@ -173,7 +264,7 @@ export function missingRequiredPresetOptions(presetId: McpToolPresetId, values: 
   if (!preset) {
     return [];
   }
-  return preset.options
+  return activePresetOptions(preset, values)
     .filter((option) => option.required && !values[option.key]?.trim())
     .map((option) => option.key);
 }
@@ -197,20 +288,54 @@ export function buildPresetMcpServerConfig(
   }
 
   const env: Record<string, string> = { ...(preset.defaultEnv ?? {}) };
-  for (const option of preset.options) {
+  // Only active options are written, so switching an image provider never leaves
+  // the other provider's key in the environment where the server would pick it up.
+  for (const option of activePresetOptions(preset, values)) {
     const value = values[option.key]?.trim();
     if (value) {
       env[option.envKey] = value;
     }
   }
 
+  const runtime = resolvePresetRuntime(preset, values);
+
   return {
     id: presetServerId(preset.id),
     name: preset.name,
     enabled,
     transport: "stdio",
-    command: preset.command,
-    args: preset.args,
+    command: runtime.command,
+    args: runtime.args,
     env: Object.keys(env).length ? env : undefined,
   };
+}
+
+/**
+ * Rewrites server configs saved under a preset id that no longer exists. The
+ * OpenRouter-only image tool became one Image Generation preset with a provider
+ * choice, so its saved key and output directory carry over as the OpenRouter one.
+ */
+export function migrateLegacyPresetServer(server: McpServerConfig): McpServerConfig | undefined {
+  const presetId = legacyPresetServerIds[server.id];
+  if (!presetId) {
+    return undefined;
+  }
+
+  const preset = mcpToolPresets.find((item) => item.id === presetId);
+  if (!preset) {
+    return undefined;
+  }
+
+  const values: McpToolPresetValues = {};
+  if (presetId === "image-generation") {
+    values.provider = "openrouter";
+  }
+  for (const option of preset.options) {
+    const saved = server.env?.[option.envKey];
+    if (saved && !values[option.key]) {
+      values[option.key] = saved;
+    }
+  }
+
+  return buildPresetMcpServerConfig(presetId, values, server.enabled);
 }

@@ -9,7 +9,7 @@ import { seedConversations } from "./core/conversation/seed";
 import type { Conversation, ChatMessage, MessageAttachment, ToolCallEvent } from "./core/conversation/types";
 import { hasConversationContent, replaceConversationDraft } from "./core/conversation/conversationDraft";
 import { generateConversationTitle } from "./core/conversation/conversationTitle";
-import { presetForServerId } from "./core/tools/mcpToolPresets";
+import { migrateLegacyPresetServer, presetForServerId } from "./core/tools/mcpToolPresets";
 import { runAgentLoop } from "./core/agent-loop/agentLoop";
 import type { ApprovalDecision, RunEvent } from "./core/agent-loop/types";
 import { chatRunReducer, createInitialChatRunState } from "./core/chat-state/chatRunReducer";
@@ -325,7 +325,25 @@ export default function App() {
   useEffect(() => {
     mcpServerDriver
       .loadServers()
-      .then(async (servers) => {
+      .then(async (loadedServers) => {
+        // Presets that were split or renamed are rewritten once, on load, so an
+        // existing configuration keeps working without being set up again.
+        const servers = await Promise.all(
+          loadedServers.map(async (server) => {
+            const migrated = migrateLegacyPresetServer(server);
+            if (!migrated) {
+              return server;
+            }
+            try {
+              await mcpServerDriver.saveServer(migrated);
+              await mcpServerDriver.removeServer(server.id);
+              return migrated;
+            } catch (error) {
+              console.error(`Could not migrate MCP server '${server.name}'`, error);
+              return server;
+            }
+          }),
+        );
         setMcpServers(servers);
         const statuses = await Promise.all(
           servers.map(async (server) => [server.id, await mcpServerDriver.getServerStatus(server.id)] as const),

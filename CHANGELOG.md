@@ -12,6 +12,14 @@
 - Starting a local model now always uses the newest installed build rather than whichever one was found first.
 - Setting a custom llama-server path opts out of update tracking, since that binary is yours to manage.
 
+### 🖼️ One image generation tool, three providers
+
+- The Image Generation tool now asks which provider you want and takes just that provider's key. OpenRouter, OpenAI, and Google Gemini are all options.
+- Picking OpenRouter runs Pixara. Picking OpenAI or Gemini runs Imaginate. It stays one card in Navi Tools either way, and only one server ever runs.
+- Only the fields for the selected provider are shown and required, and only that provider's key reaches the server, so it never registers tools for a provider you did not choose.
+- An existing OpenRouter image tool is migrated automatically on first launch, keeping its key, output directory, and on/off state.
+- The output directory is optional for OpenAI and Gemini, since Imaginate defaults to `~/Pictures/imaginate`.
+
 ### 👋 New chat greetings
 
 - The new chat screen now rotates through fifteen greetings instead of always saying "Ready when you are."
