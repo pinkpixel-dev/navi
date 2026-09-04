@@ -13,6 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { pickEmptyChatGreeting } from "../core/conversation/emptyChatGreeting";
 import type { Conversation, MessageAttachment, ToolCallEvent } from "../core/conversation/types";
 import type { ChatRunState } from "../core/chat-state/chatRunReducer";
 import type { ApprovalDecision } from "../core/agent-loop/types";
@@ -217,9 +218,7 @@ export function ChatWorkspace({
     () => availableModels.filter((model) => model.provider === effectiveProvider),
     [availableModels, effectiveProvider],
   );
-  const emptyChatHeading = userDisplayName?.trim()
-    ? `Ready when you are, ${userDisplayName.trim()}.`
-    : "Ready when you are.";
+  const emptyChatHeading = pickEmptyChatGreeting(conversation.id, userDisplayName);
 
   const handleProviderChange = (providerName: string) => {
     setSelectedProvider(providerName);

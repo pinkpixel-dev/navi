@@ -12,6 +12,12 @@
 - Starting a local model now always uses the newest installed build rather than whichever one was found first.
 - Setting a custom llama-server path opts out of update tracking, since that binary is yours to manage.
 
+### 👋 New chat greetings
+
+- The new chat screen now rotates through fifteen greetings instead of always saying "Ready when you are."
+- Each greeting is picked from the conversation id, so it stays put while you are in a chat and changes when you open a new one.
+- Every greeting has a version that reads correctly when no display name is set.
+
 ## 1.1.0 - August 31, 2026
 
 ### 💬 Rich Markdown responses
