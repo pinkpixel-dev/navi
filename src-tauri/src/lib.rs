@@ -202,6 +202,29 @@ fn download_local_runtime(app: AppHandle, acceleration: Option<String>) -> Resul
 }
 
 #[tauri::command]
+fn check_local_runtime_update(
+    app: AppHandle,
+    binary_override: Option<String>,
+    acceleration: Option<String>,
+    force: Option<bool>,
+) -> Result<serde_json::Value, String> {
+    llama_runtime::update_info(
+        &app,
+        binary_override.as_deref(),
+        acceleration.as_deref(),
+        force.unwrap_or(false),
+    )
+}
+
+#[tauri::command]
+fn update_local_runtime(
+    app: AppHandle,
+    acceleration: Option<String>,
+) -> Result<serde_json::Value, String> {
+    llama_runtime::install_update(&app, acceleration.as_deref())
+}
+
+#[tauri::command]
 fn start_local_runtime(
     app: AppHandle,
     model_id: String,
@@ -314,6 +337,8 @@ pub fn run() {
             remove_local_model,
             is_local_runtime_downloaded,
             download_local_runtime,
+            check_local_runtime_update,
+            update_local_runtime,
             start_local_runtime,
             stop_local_runtime,
             get_local_runtime_status,

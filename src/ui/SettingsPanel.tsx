@@ -1,5 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { FolderOpen, KeyRound, Pencil, Play, Plug, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
+import { ArrowUpCircle, FolderOpen, KeyRound, Pencil, Play, Plug, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { createProviderFromConfig } from "../core/providers/createProvider";
 import {
@@ -10,8 +10,10 @@ import {
 import { createDefaultLocalModelRepository, type LocalModel } from "../core/local-models/localModel";
 import {
   createDefaultLlamaRuntimeDriver,
+  unknownRuntimeUpdateInfo,
   type LocalRuntimeAcceleration,
   type LocalRuntimeStatus,
+  type LocalRuntimeUpdateInfo,
 } from "../core/local-models/llamaRuntime";
 import {
   createDefaultMcpServerDriver,
@@ -200,6 +202,9 @@ export function SettingsPanel({
   const [localModelStatus, setLocalModelStatus] = useState("Import a .gguf file to make it selectable in chat.");
   const [runtimeStatus, setRuntimeStatus] = useState<LocalRuntimeStatus>(idleRuntimeStatus);
   const [isRuntimeBusy, setIsRuntimeBusy] = useState(false);
+  const [runtimeUpdate, setRuntimeUpdate] = useState<LocalRuntimeUpdateInfo>(unknownRuntimeUpdateInfo);
+  const [isCheckingRuntimeUpdate, setIsCheckingRuntimeUpdate] = useState(false);
+  const [runtimeUpdateStatus, setRuntimeUpdateStatus] = useState<string | null>(null);
   const [draftMcpServer, setDraftMcpServer] = useState<McpServerConfig>(createDraftMcpServer());
   const [isMcpModalOpen, setIsMcpModalOpen] = useState(false);
   const [mcpArgsText, setMcpArgsText] = useState("");
@@ -219,6 +224,18 @@ export function SettingsPanel({
     llamaRuntimeDriver.getRuntimeStatus().then(setRuntimeStatus).catch(() => {});
   }, []);
 
+  // Checks once when settings open. The backend caches the GitHub answer for a day,
+  // so this is usually a local read and never nags when the machine is offline.
+  useEffect(() => {
+    if (!isTauri) {
+      return;
+    }
+    llamaRuntimeDriver
+      .checkRuntimeUpdate(appSettings.customLlamaServerPath, appSettings.localRuntimeAcceleration ?? "auto")
+      .then(setRuntimeUpdate)
+      .catch(() => {});
+  }, [appSettings.customLlamaServerPath, appSettings.localRuntimeAcceleration]);
+
   useEffect(() => {
     if (!isTauri || !isRuntimeBusy) {
       return;
@@ -232,6 +249,23 @@ export function SettingsPanel({
   const userAvatarInputRef = useRef<HTMLInputElement>(null);
   const assistantAvatarInputRef = useRef<HTMLInputElement>(null);
   const customMcpServers = useMemo(() => mcpServers.filter((server) => !presetForServerId(server.id)), [mcpServers]);
+
+  const runtimeVersionSummary = useMemo(() => {
+    if (runtimeUpdate.usingCustomBinary) {
+      return "Using your custom llama-server path, so Navi does not manage updates for it.";
+    }
+    if (!runtimeUpdate.installedVersion) {
+      return "Not downloaded yet. Navi installs the newest build the first time you start a local model.";
+    }
+    const parts = [`Installed ${runtimeUpdate.installedVersion}`];
+    if (runtimeUpdate.latestVersion && !runtimeUpdate.updateAvailable) {
+      parts.push("newest available");
+    }
+    if (runtimeUpdate.checkedAt) {
+      parts.push(`checked ${new Date(runtimeUpdate.checkedAt * 1000).toLocaleDateString()}`);
+    }
+    return parts.join(" · ");
+  }, [runtimeUpdate]);
 
   const updateDraft = (patch: Partial<ProviderConfig>) => {
     setDraftProvider((current) => ({ ...current, ...patch }));
@@ -398,6 +432,48 @@ export function SettingsPanel({
     setLocalModelStatus("Model removed.");
   };
 
+  const handleCheckRuntimeUpdate = async () => {
+    setIsCheckingRuntimeUpdate(true);
+    setRuntimeUpdateStatus("Checking llama.cpp releases...");
+    try {
+      const info = await llamaRuntimeDriver.checkRuntimeUpdate(
+        appSettings.customLlamaServerPath,
+        appSettings.localRuntimeAcceleration ?? "auto",
+        true,
+      );
+      setRuntimeUpdate(info);
+      if (info.message) {
+        setRuntimeUpdateStatus(info.message);
+      } else if (info.updateAvailable) {
+        setRuntimeUpdateStatus(null);
+      } else {
+        setRuntimeUpdateStatus("The runtime is up to date.");
+      }
+    } catch (error) {
+      setRuntimeUpdateStatus(error instanceof Error ? error.message : "Could not check for a runtime update.");
+    } finally {
+      setIsCheckingRuntimeUpdate(false);
+    }
+  };
+
+  const handleUpdateRuntime = async () => {
+    setIsCheckingRuntimeUpdate(true);
+    setRuntimeUpdateStatus(`Downloading llama.cpp ${runtimeUpdate.latestVersion ?? "runtime"}...`);
+    try {
+      if (runtimeStatus.state === "ready") {
+        await llamaRuntimeDriver.stopRuntime();
+        setRuntimeStatus(idleRuntimeStatus);
+      }
+      const info = await llamaRuntimeDriver.updateRuntime(appSettings.localRuntimeAcceleration ?? "auto");
+      setRuntimeUpdate(info);
+      setRuntimeUpdateStatus(`Updated to llama.cpp ${info.installedVersion ?? "the newest build"}.`);
+    } catch (error) {
+      setRuntimeUpdateStatus(error instanceof Error ? error.message : "Could not update the runtime.");
+    } finally {
+      setIsCheckingRuntimeUpdate(false);
+    }
+  };
+
   const handleStartLocalModel = async (model: LocalModel) => {
     setIsRuntimeBusy(true);
     try {
@@ -413,6 +489,10 @@ export function SettingsPanel({
         }
         setLocalModelStatus("Downloading llama.cpp runtime...");
         await llamaRuntimeDriver.downloadRuntime(acceleration);
+        llamaRuntimeDriver
+          .checkRuntimeUpdate(appSettings.customLlamaServerPath, acceleration)
+          .then(setRuntimeUpdate)
+          .catch(() => {});
       }
 
       setLocalModelStatus(`Starting ${model.fileName} — this can take a while for large models...`);
@@ -902,6 +982,46 @@ export function SettingsPanel({
                   <FolderOpen size={15} />
                   Import GGUF model
                 </button>
+              </div>
+              <div
+                className={`settings-row settings-runtime-row${runtimeUpdate.updateAvailable ? " is-update-available" : ""}`}
+              >
+                <strong>
+                  {runtimeUpdate.updateAvailable ? (
+                    <>
+                      <ArrowUpCircle size={14} aria-hidden="true" />
+                      llama.cpp {runtimeUpdate.latestVersion} is available
+                    </>
+                  ) : (
+                    "llama.cpp runtime"
+                  )}
+                </strong>
+                <span>{runtimeVersionSummary}</span>
+                {runtimeUpdateStatus ? <span role="status">{runtimeUpdateStatus}</span> : null}
+                {runtimeUpdate.usingCustomBinary ? null : (
+                  <div className="settings-actions">
+                    {runtimeUpdate.updateAvailable ? (
+                      <button
+                        type="button"
+                        onClick={handleUpdateRuntime}
+                        disabled={isCheckingRuntimeUpdate || isRuntimeBusy}
+                        title={`Download llama.cpp ${runtimeUpdate.latestVersion} and keep the current build for rollback`}
+                      >
+                        <ArrowUpCircle size={15} />
+                        Update runtime
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={handleCheckRuntimeUpdate}
+                      disabled={isCheckingRuntimeUpdate}
+                      title="Ask GitHub for the newest llama.cpp release now"
+                    >
+                      <RefreshCw size={15} />
+                      Check for updates
+                    </button>
+                  </div>
+                )}
               </div>
               <label>
                 <span>Custom llama-server path (optional)</span>

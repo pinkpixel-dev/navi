@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::fs;
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 const HEALTH_POLL_INTERVAL_MS: u64 = 500;
@@ -16,6 +16,11 @@ const HEALTH_POLL_TIMEOUT_SECS: u64 = 120;
 const MAX_LOG_LINES: usize = 200;
 const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
 const DEFAULT_GPU_LAYERS: u32 = 99;
+/// How long a cached "latest release" answer stays good before we ask GitHub again.
+const UPDATE_CHECK_INTERVAL_SECS: u64 = 60 * 60 * 24;
+/// The current build plus one previous build, so a bad update can be rolled back.
+const KEEP_INSTALLED_BUILDS: usize = 2;
+const UPDATE_CACHE_FILE: &str = "update-check.json";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeAcceleration {
@@ -112,6 +117,42 @@ struct ReleaseResponse {
     assets: Vec<ReleaseAsset>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct UpdateCheckCache {
+    checked_at: u64,
+    latest_tag: String,
+}
+
+struct InstalledBuild {
+    tag: String,
+    dir: PathBuf,
+    binary: PathBuf,
+}
+
+fn now_unix() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or(0)
+}
+
+/// llama.cpp tags its releases `b<build number>`, so ordering is numeric when we
+/// recognise the shape and falls back to plain string ordering when we do not.
+fn build_number(tag: &str) -> Option<u64> {
+    tag.strip_prefix('b')?.parse::<u64>().ok()
+}
+
+fn build_sort_key(tag: &str) -> (u64, String) {
+    (build_number(tag).unwrap_or(0), tag.to_string())
+}
+
+fn is_newer_build(candidate: &str, installed: &str) -> bool {
+    match (build_number(candidate), build_number(installed)) {
+        (Some(candidate), Some(installed)) => candidate > installed,
+        _ => candidate != installed,
+    }
+}
+
 fn status_json(inner: &RuntimeInner) -> Value {
     serde_json::json!({
         "state": inner.state.as_str(),
@@ -170,9 +211,7 @@ fn platform_asset_patterns(acceleration: RuntimeAcceleration) -> Result<Vec<&'st
     patterns_for(std::env::consts::OS, std::env::consts::ARCH, acceleration)
 }
 
-fn resolve_release_asset(acceleration: RuntimeAcceleration) -> Result<(String, String), String> {
-    let patterns = platform_asset_patterns(acceleration)?;
-
+fn fetch_latest_release() -> Result<ReleaseResponse, String> {
     let body = ureq::get(GITHUB_RELEASES_URL)
         .set("User-Agent", "navi-app")
         .call()
@@ -180,9 +219,13 @@ fn resolve_release_asset(acceleration: RuntimeAcceleration) -> Result<(String, S
         .into_string()
         .map_err(|error| format!("Could not read GitHub release response: {error}"))?;
 
-    let release: ReleaseResponse = serde_json::from_str(&body)
-        .map_err(|error| format!("Could not parse GitHub release response: {error}"))?;
+    serde_json::from_str(&body)
+        .map_err(|error| format!("Could not parse GitHub release response: {error}"))
+}
 
+fn resolve_release_asset(acceleration: RuntimeAcceleration) -> Result<(String, String), String> {
+    let patterns = platform_asset_patterns(acceleration)?;
+    let release = fetch_latest_release()?;
     let assets = release.assets;
     for pattern in &patterns {
         if let Some(asset) = assets.iter().find(|asset| asset.name.contains(pattern)) {
@@ -235,6 +278,53 @@ fn runtime_install_root(
     acceleration: RuntimeAcceleration,
 ) -> Result<PathBuf, String> {
     Ok(runtime_root(app)?.join(acceleration.directory_name()))
+}
+
+/// Every downloaded build under an acceleration root, newest first. Each build
+/// lives in a directory named after its release tag.
+fn installed_builds(root: &Path) -> Vec<InstalledBuild> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+
+    let mut builds: Vec<InstalledBuild> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let dir = entry.path();
+            if !dir.is_dir() {
+                return None;
+            }
+            let tag = dir.file_name()?.to_str()?.to_string();
+            let binary = find_server_binary(&dir)?;
+            Some(InstalledBuild { tag, dir, binary })
+        })
+        .collect();
+
+    builds.sort_by_key(|build| std::cmp::Reverse(build_sort_key(&build.tag)));
+    builds
+}
+
+fn active_build(root: &Path) -> Option<InstalledBuild> {
+    installed_builds(root).into_iter().next()
+}
+
+fn runtime_is_running(app: &AppHandle) -> bool {
+    let state = app.state::<RuntimeState>();
+    let inner = state.0.lock().unwrap();
+    inner.child.is_some()
+}
+
+/// Drops builds beyond the newest `KEEP_INSTALLED_BUILDS`. Skipped while a model
+/// is running so we never delete the binary out from under a live process; the
+/// next update pass cleans up instead.
+fn prune_old_builds(app: &AppHandle, root: &Path) {
+    if runtime_is_running(app) {
+        return;
+    }
+
+    for build in installed_builds(root).into_iter().skip(KEEP_INSTALLED_BUILDS) {
+        let _ = fs::remove_dir_all(&build.dir);
+    }
 }
 
 pub fn is_downloaded(
@@ -298,20 +388,13 @@ fn extract_zip(bytes: Vec<u8>, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub fn download_and_extract(app: &AppHandle, acceleration: Option<&str>) -> Result<(), String> {
-    let acceleration = RuntimeAcceleration::from_option(acceleration)?;
-    let root = runtime_install_root(app, acceleration)?;
-    if find_server_binary(&root).is_some() {
-        return Ok(());
-    }
-
-    let (url, tag) = resolve_release_asset(acceleration)?;
+fn install_release(root: &Path, url: &str, tag: &str) -> Result<(), String> {
     let dir = root.join(tag);
     fs::create_dir_all(&dir)
         .map_err(|error| format!("Could not create runtime directory: {error}"))?;
 
     let mut bytes = Vec::new();
-    ureq::get(&url)
+    ureq::get(url)
         .set("User-Agent", "navi-app")
         .call()
         .map_err(|error| format!("Could not download llama.cpp runtime: {error}"))?
@@ -341,6 +424,152 @@ pub fn download_and_extract(app: &AppHandle, acceleration: Option<&str>) -> Resu
     Ok(())
 }
 
+pub fn download_and_extract(app: &AppHandle, acceleration: Option<&str>) -> Result<(), String> {
+    let acceleration = RuntimeAcceleration::from_option(acceleration)?;
+    let root = runtime_install_root(app, acceleration)?;
+    if find_server_binary(&root).is_some() {
+        return Ok(());
+    }
+
+    let (url, tag) = resolve_release_asset(acceleration)?;
+    install_release(&root, &url, &tag)?;
+    write_update_cache(app, &tag);
+    Ok(())
+}
+
+fn update_cache_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(runtime_root(app)?.join(UPDATE_CACHE_FILE))
+}
+
+fn read_update_cache(app: &AppHandle) -> Option<UpdateCheckCache> {
+    let path = update_cache_path(app).ok()?;
+    let body = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+fn write_update_cache(app: &AppHandle, latest_tag: &str) {
+    let Ok(path) = update_cache_path(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let cache = UpdateCheckCache {
+        checked_at: now_unix(),
+        latest_tag: latest_tag.to_string(),
+    };
+    if let Ok(body) = serde_json::to_string(&cache) {
+        let _ = fs::write(path, body);
+    }
+}
+
+fn update_info_json(
+    installed: Option<&str>,
+    latest: Option<&str>,
+    checked_at: Option<u64>,
+    using_custom_binary: bool,
+    message: Option<String>,
+) -> Value {
+    let update_available = match (installed, latest) {
+        (Some(installed), Some(latest)) if !using_custom_binary => {
+            is_newer_build(latest, installed)
+        }
+        _ => false,
+    };
+
+    serde_json::json!({
+        "installedVersion": installed,
+        "latestVersion": latest,
+        "updateAvailable": update_available,
+        "checkedAt": checked_at,
+        "usingCustomBinary": using_custom_binary,
+        "message": message,
+    })
+}
+
+/// Reports the installed build against the newest published one. Network calls are
+/// cached for `UPDATE_CHECK_INTERVAL_SECS` unless `force` is set, so the automatic
+/// check on opening settings costs nothing most of the time. A failed lookup is
+/// reported through `message` rather than as an error, so a background check can
+/// stay quiet when the machine is offline.
+pub fn update_info(
+    app: &AppHandle,
+    binary_override: Option<&str>,
+    acceleration: Option<&str>,
+    force: bool,
+) -> Result<Value, String> {
+    if let Some(path) = binary_override {
+        if !path.is_empty() {
+            return Ok(update_info_json(None, None, None, true, None));
+        }
+    }
+
+    let acceleration = RuntimeAcceleration::from_option(acceleration)?;
+    let root = runtime_install_root(app, acceleration)?;
+    let installed = active_build(&root).map(|build| build.tag);
+
+    let cached = read_update_cache(app);
+    let now = now_unix();
+    let is_fresh = cached
+        .as_ref()
+        .map(|cache| now.saturating_sub(cache.checked_at) < UPDATE_CHECK_INTERVAL_SECS)
+        .unwrap_or(false);
+
+    if !force && is_fresh {
+        let cache = cached.expect("a fresh cache is present");
+        return Ok(update_info_json(
+            installed.as_deref(),
+            Some(&cache.latest_tag),
+            Some(cache.checked_at),
+            false,
+            None,
+        ));
+    }
+
+    match fetch_latest_release() {
+        Ok(release) => {
+            write_update_cache(app, &release.tag_name);
+            Ok(update_info_json(
+                installed.as_deref(),
+                Some(&release.tag_name),
+                Some(now),
+                false,
+                None,
+            ))
+        }
+        Err(error) => Ok(update_info_json(
+            installed.as_deref(),
+            cached.as_ref().map(|cache| cache.latest_tag.as_str()),
+            cached.as_ref().map(|cache| cache.checked_at),
+            false,
+            Some(error),
+        )),
+    }
+}
+
+/// Downloads the newest published build alongside the current one, then prunes
+/// anything older than the builds we keep for rollback.
+pub fn install_update(app: &AppHandle, acceleration: Option<&str>) -> Result<Value, String> {
+    let acceleration_mode = RuntimeAcceleration::from_option(acceleration)?;
+    let root = runtime_install_root(app, acceleration_mode)?;
+    let (url, tag) = resolve_release_asset(acceleration_mode)?;
+    write_update_cache(app, &tag);
+
+    let already_installed = installed_builds(&root)
+        .iter()
+        .any(|build| build.tag == tag);
+
+    if !already_installed {
+        // Clear any half-extracted directory left behind by an interrupted download.
+        let _ = fs::remove_dir_all(root.join(&tag));
+        install_release(&root, &url, &tag)?;
+        prune_old_builds(app, &root);
+    }
+
+    update_info(app, None, acceleration, false)
+}
+
 fn resolve_binary_path(
     app: &AppHandle,
     binary_override: Option<&str>,
@@ -358,6 +587,10 @@ fn resolve_binary_path(
     }
 
     let root = runtime_install_root(app, acceleration)?;
+    if let Some(build) = active_build(&root) {
+        return Ok(build.binary);
+    }
+
     find_server_binary(&root).ok_or_else(|| "llama.cpp runtime is not downloaded yet".to_string())
 }
 
@@ -576,6 +809,62 @@ mod tests {
             Ok(vec!["macos-arm64"])
         );
         assert!(patterns_for("freebsd", "x86_64", RuntimeAcceleration::Auto).is_err());
+    }
+
+    #[test]
+    fn orders_release_tags_by_build_number() {
+        assert_eq!(build_number("b7891"), Some(7891));
+        assert_eq!(build_number("master-abc123"), None);
+        assert!(build_sort_key("b7950") > build_sort_key("b7891"));
+        assert!(build_sort_key("b10000") > build_sort_key("b9999"));
+    }
+
+    #[test]
+    fn detects_newer_builds_without_downgrading() {
+        assert!(is_newer_build("b7950", "b7891"));
+        assert!(!is_newer_build("b7891", "b7950"));
+        assert!(!is_newer_build("b7891", "b7891"));
+        // Unrecognised tag shapes fall back to "different means newer".
+        assert!(is_newer_build("master-abc", "b7891"));
+        assert!(!is_newer_build("master-abc", "master-abc"));
+    }
+
+    #[test]
+    fn reports_an_update_only_when_a_newer_build_exists() {
+        let available = update_info_json(Some("b7891"), Some("b7950"), Some(10), false, None);
+        assert_eq!(available["updateAvailable"], serde_json::json!(true));
+        assert_eq!(available["installedVersion"], serde_json::json!("b7891"));
+
+        let current = update_info_json(Some("b7950"), Some("b7950"), Some(10), false, None);
+        assert_eq!(current["updateAvailable"], serde_json::json!(false));
+
+        let custom = update_info_json(Some("b7891"), Some("b7950"), Some(10), true, None);
+        assert_eq!(custom["updateAvailable"], serde_json::json!(false));
+
+        let offline = update_info_json(Some("b7891"), None, None, false, Some("no network".into()));
+        assert_eq!(offline["updateAvailable"], serde_json::json!(false));
+        assert_eq!(offline["message"], serde_json::json!("no network"));
+    }
+
+    #[test]
+    fn lists_installed_builds_newest_first() {
+        let root = std::env::temp_dir().join(format!("navi-builds-{}", pick_free_port().unwrap()));
+        let name = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+        for tag in ["b7891", "b7950", "b800"] {
+            let dir = root.join(tag).join("build").join("bin");
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join(name), b"binary").unwrap();
+        }
+        // A directory with no binary is not a usable build.
+        fs::create_dir_all(root.join("b9999")).unwrap();
+
+        let tags: Vec<String> = installed_builds(&root)
+            .into_iter()
+            .map(|build| build.tag)
+            .collect();
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(tags, vec!["b7950", "b7891", "b800"]);
     }
 
     #[test]

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0 - September 4, 2026
+
+### 🔄 llama.cpp runtime updates
+
+- Navi now tracks which llama.cpp build it installed and compares it against the newest published release, so local models can keep up with new architectures added upstream.
+- Opening Settings checks for a newer build at most once a day. The answer is cached, so the check is normally a local read and stays quiet when you are offline.
+- Local Models gained a runtime row showing the installed build, when it was last checked, and a Check for updates button for an on-demand check.
+- When a newer build exists, an update prompt appears with the new build number and an Update runtime button. Downloads never start without you clicking it.
+- Updates install alongside the current build and keep one previous build on disk, so you can fall back if a new llama.cpp release regresses. Older builds are pruned, and never while a model is running.
+- Starting a local model now always uses the newest installed build rather than whichever one was found first.
+- Setting a custom llama-server path opts out of update tracking, since that binary is yours to manage.
+
 ## 1.1.0 - August 31, 2026
 
 ### 💬 Rich Markdown responses

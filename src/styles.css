@@ -1942,6 +1942,25 @@ button {
   background: var(--surface-raised);
 }
 
+.settings-runtime-row {
+  gap: 8px;
+}
+
+.settings-runtime-row strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-runtime-row .settings-actions {
+  margin-top: 2px;
+}
+
+.settings-runtime-row.is-update-available {
+  border-color: var(--accent-strong);
+  background: var(--accent-faint);
+}
+
 .settings-row-button {
   width: 100%;
   color: var(--text);
