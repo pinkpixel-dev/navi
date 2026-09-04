@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpCircle, FolderOpen, KeyRound, Pencil, Play, Plug, Plus, RefreshCw, Save, Square, Trash2, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { describeError } from "../core/errorMessage";
 import { createProviderFromConfig } from "../core/providers/createProvider";
 import {
   createDefaultProviderConfigRepository,
@@ -423,7 +424,7 @@ export function SettingsPanel({
           : `Imported ${imported.fileName}, but its GGUF metadata could not be fully read.`,
       );
     } catch (error) {
-      setLocalModelStatus(error instanceof Error ? error.message : "Could not import this model.");
+      setLocalModelStatus(describeError(error, "Could not import this model."));
     }
   };
 
@@ -451,7 +452,7 @@ export function SettingsPanel({
         setRuntimeUpdateStatus("The runtime is up to date.");
       }
     } catch (error) {
-      setRuntimeUpdateStatus(error instanceof Error ? error.message : "Could not check for a runtime update.");
+      setRuntimeUpdateStatus(describeError(error, "Could not check for a runtime update."));
     } finally {
       setIsCheckingRuntimeUpdate(false);
     }
@@ -469,7 +470,7 @@ export function SettingsPanel({
       setRuntimeUpdate(info);
       setRuntimeUpdateStatus(`Updated to llama.cpp ${info.installedVersion ?? "the newest build"}.`);
     } catch (error) {
-      setRuntimeUpdateStatus(error instanceof Error ? error.message : "Could not update the runtime.");
+      setRuntimeUpdateStatus(describeError(error, "Could not update the runtime."));
     } finally {
       setIsCheckingRuntimeUpdate(false);
     }

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.1 - September 4, 2026
+
+### 🐛 Fixes
+
+- Fixed the llama.cpp runtime updater, which reported `v0.3.0` as an available update and then failed with "Could not update the runtime." Upstream now publishes its `b<build>` nightlies as GitHub prereleases and reserves the "latest" release for a semver tag that ships no binaries, so Navi lists releases and picks the newest build itself.
+- The update check now only advertises a build it can actually install. If a nightly is missing an archive for your platform, Navi walks back to the one before it instead of offering an update that would fail.
+- A tag Navi cannot read as a build number is no longer treated as an update, so an upstream release label can't produce a phantom update prompt again.
+- Runtime errors from the Rust side now reach the Settings panel instead of being replaced by a generic message. Tauri rejects with a plain string rather than an `Error`, which the old check discarded.
+- Windows ROCm downloads look for `win-rocm` again. The old `win-hip-radeon-x64` asset no longer exists upstream.
+- Windows CUDA downloads no longer match `cudart-llama-bin-*`, the NVIDIA redistributable, which sorts ahead of the real runtime archive and contains no llama-server.
+
 ## 1.2.0 - September 4, 2026
 
 ### 🔄 llama.cpp runtime updates

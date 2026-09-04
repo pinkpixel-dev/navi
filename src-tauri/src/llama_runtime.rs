@@ -14,7 +14,11 @@ use tauri::{AppHandle, Manager};
 const HEALTH_POLL_INTERVAL_MS: u64 = 500;
 const HEALTH_POLL_TIMEOUT_SECS: u64 = 120;
 const MAX_LOG_LINES: usize = 200;
-const GITHUB_RELEASES_URL: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
+/// llama.cpp publishes its `b<build>` binaries as GitHub *prereleases* and keeps
+/// the "latest" release for a semver tag that ships no binaries at all, so we list
+/// releases and pick the newest usable build ourselves.
+const GITHUB_RELEASES_URL: &str =
+    "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30";
 const DEFAULT_GPU_LAYERS: u32 = 99;
 /// How long a cached "latest release" answer stays good before we ask GitHub again.
 const UPDATE_CHECK_INTERVAL_SECS: u64 = 60 * 60 * 24;
@@ -149,7 +153,9 @@ fn build_sort_key(tag: &str) -> (u64, String) {
 fn is_newer_build(candidate: &str, installed: &str) -> bool {
     match (build_number(candidate), build_number(installed)) {
         (Some(candidate), Some(installed)) => candidate > installed,
-        _ => candidate != installed,
+        // A tag we cannot read as a build number is a tag we cannot install, so it
+        // never counts as an available update.
+        _ => false,
     }
 }
 
@@ -198,7 +204,7 @@ fn patterns_for(
             Ok(vec!["win-cuda-13.3-x64", "win-cuda-12.4-x64"])
         }
         ("windows", "x86_64", RuntimeAcceleration::Vulkan) => Ok(vec!["win-vulkan-x64"]),
-        ("windows", "x86_64", RuntimeAcceleration::Rocm) => Ok(vec!["win-hip-radeon-x64"]),
+        ("windows", "x86_64", RuntimeAcceleration::Rocm) => Ok(vec!["win-rocm"]),
         ("windows", "x86_64", RuntimeAcceleration::Sycl) => Ok(vec!["win-sycl-x64"]),
         ("windows", "aarch64", RuntimeAcceleration::Auto | RuntimeAcceleration::Cpu) => {
             Ok(vec!["win-cpu-arm64"])
@@ -211,7 +217,17 @@ fn platform_asset_patterns(acceleration: RuntimeAcceleration) -> Result<Vec<&'st
     patterns_for(std::env::consts::OS, std::env::consts::ARCH, acceleration)
 }
 
-fn fetch_latest_release() -> Result<ReleaseResponse, String> {
+/// Keeps only the `b<build>` releases and puts the newest first.
+fn build_releases(releases: Vec<ReleaseResponse>) -> Vec<ReleaseResponse> {
+    let mut builds: Vec<ReleaseResponse> = releases
+        .into_iter()
+        .filter(|release| build_number(&release.tag_name).is_some())
+        .collect();
+    builds.sort_by_key(|release| std::cmp::Reverse(build_sort_key(&release.tag_name)));
+    builds
+}
+
+fn fetch_build_releases() -> Result<Vec<ReleaseResponse>, String> {
     let body = ureq::get(GITHUB_RELEASES_URL)
         .set("User-Agent", "navi-app")
         .call()
@@ -219,24 +235,53 @@ fn fetch_latest_release() -> Result<ReleaseResponse, String> {
         .into_string()
         .map_err(|error| format!("Could not read GitHub release response: {error}"))?;
 
-    serde_json::from_str(&body)
-        .map_err(|error| format!("Could not parse GitHub release response: {error}"))
+    let releases: Vec<ReleaseResponse> = serde_json::from_str(&body)
+        .map_err(|error| format!("Could not parse GitHub release response: {error}"))?;
+
+    Ok(build_releases(releases))
+}
+
+/// Every runtime archive is named `llama-<build>-bin-<platform>`. The prefix matters:
+/// a CUDA release also ships `cudart-llama-bin-win-cuda-13.3-x64.zip`, the NVIDIA
+/// redistributable, which contains no llama-server and sorts ahead of the build we want.
+fn is_runtime_asset(name: &str, pattern: &str) -> bool {
+    name.starts_with("llama-") && name.contains(pattern)
+}
+
+/// The newest build that actually ships an archive for this platform. Walking past
+/// a build whose asset is missing keeps a single incomplete nightly from blocking
+/// updates, and means a build we advertise is always one we can install.
+fn find_release_asset<'a>(
+    releases: &'a [ReleaseResponse],
+    patterns: &[&str],
+) -> Option<(&'a ReleaseResponse, &'a ReleaseAsset)> {
+    releases.iter().find_map(|release| {
+        patterns.iter().find_map(|pattern| {
+            release
+                .assets
+                .iter()
+                .find(|asset| is_runtime_asset(&asset.name, pattern))
+                .map(|asset| (release, asset))
+        })
+    })
 }
 
 fn resolve_release_asset(acceleration: RuntimeAcceleration) -> Result<(String, String), String> {
     let patterns = platform_asset_patterns(acceleration)?;
-    let release = fetch_latest_release()?;
-    let assets = release.assets;
-    for pattern in &patterns {
-        if let Some(asset) = assets.iter().find(|asset| asset.name.contains(pattern)) {
-            return Ok((asset.browser_download_url.clone(), release.tag_name));
-        }
+    let releases = fetch_build_releases()?;
+    if releases.is_empty() {
+        return Err("GitHub returned no llama.cpp build releases".to_string());
     }
 
-    Err(format!(
-        "No llama.cpp release asset matching {} was found",
-        patterns.join(", ")
-    ))
+    let (release, asset) = find_release_asset(&releases, &patterns).ok_or_else(|| {
+        format!(
+            "No llama.cpp release asset matching {} was found in the {} most recent builds",
+            patterns.join(", "),
+            releases.len()
+        )
+    })?;
+
+    Ok((asset.browser_download_url.clone(), release.tag_name.clone()))
 }
 
 fn runtime_root(app: &AppHandle) -> Result<PathBuf, String> {
@@ -527,12 +572,12 @@ pub fn update_info(
         ));
     }
 
-    match fetch_latest_release() {
-        Ok(release) => {
-            write_update_cache(app, &release.tag_name);
+    match resolve_release_asset(acceleration) {
+        Ok((_, tag)) => {
+            write_update_cache(app, &tag);
             Ok(update_info_json(
                 installed.as_deref(),
-                Some(&release.tag_name),
+                Some(&tag),
                 Some(now),
                 false,
                 None,
@@ -797,6 +842,10 @@ mod tests {
             Ok(vec!["ubuntu-rocm"])
         );
         assert_eq!(
+            patterns_for("windows", "x86_64", RuntimeAcceleration::Rocm),
+            Ok(vec!["win-rocm"])
+        );
+        assert_eq!(
             patterns_for("windows", "x86_64", RuntimeAcceleration::Auto),
             Ok(vec![
                 "win-cuda-13.3-x64",
@@ -824,9 +873,70 @@ mod tests {
         assert!(is_newer_build("b7950", "b7891"));
         assert!(!is_newer_build("b7891", "b7950"));
         assert!(!is_newer_build("b7891", "b7891"));
-        // Unrecognised tag shapes fall back to "different means newer".
-        assert!(is_newer_build("master-abc", "b7891"));
-        assert!(!is_newer_build("master-abc", "master-abc"));
+        // A semver release such as `v0.3.0` carries no binaries, so it is never an
+        // update even though the tag differs from the installed one.
+        assert!(!is_newer_build("v0.3.0", "b7891"));
+        assert!(!is_newer_build("master-abc", "b7891"));
+    }
+
+    fn release(tag: &str, asset_names: &[&str]) -> ReleaseResponse {
+        ReleaseResponse {
+            tag_name: tag.to_string(),
+            assets: asset_names
+                .iter()
+                .map(|name| ReleaseAsset {
+                    name: (*name).to_string(),
+                    browser_download_url: format!("https://example.test/{tag}/{name}"),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn keeps_only_build_releases_newest_first() {
+        let tags: Vec<String> = build_releases(vec![
+            release("b10796", &[]),
+            release("v0.3.0", &["nightly-tag.txt"]),
+            release("b10797", &[]),
+            release("b9977", &[]),
+        ])
+        .into_iter()
+        .map(|release| release.tag_name)
+        .collect();
+
+        assert_eq!(tags, vec!["b10797", "b10796", "b9977"]);
+    }
+
+    #[test]
+    fn picks_the_newest_build_that_ships_our_asset() {
+        let releases = vec![
+            release("b10797", &["llama-b10797-bin-ubuntu-x64.tar.gz"]),
+            release(
+                "b10796",
+                &["llama-b10796-bin-ubuntu-vulkan-x64.tar.gz"],
+            ),
+        ];
+
+        let (found, asset) = find_release_asset(&releases, &["ubuntu-vulkan-x64"])
+            .expect("a build shipping the vulkan asset");
+        assert_eq!(found.tag_name, "b10796");
+        assert_eq!(asset.name, "llama-b10796-bin-ubuntu-vulkan-x64.tar.gz");
+
+        // Patterns are tried in order, so the preferred build wins within a release,
+        // and the CUDA redistributable never stands in for the runtime archive.
+        let cuda = vec![release(
+            "b10797",
+            &[
+                "cudart-llama-bin-win-cuda-13.3-x64.zip",
+                "llama-b10797-bin-win-cuda-12.4-x64.zip",
+                "llama-b10797-bin-win-cuda-13.3-x64.zip",
+            ],
+        )];
+        let (_, preferred) = find_release_asset(&cuda, &["win-cuda-13.3-x64", "win-cuda-12.4-x64"])
+            .expect("a cuda asset");
+        assert_eq!(preferred.name, "llama-b10797-bin-win-cuda-13.3-x64.zip");
+
+        assert!(find_release_asset(&releases, &["macos-arm64"]).is_none());
     }
 
     #[test]
