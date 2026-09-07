@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.2.2 - September 7, 2026
+
+### 🤖 Providers
+
+- Migrated the native OpenAI provider to the OpenAI Responses API (`/v1/responses`) to support modern reasoning models like `gpt-5.6-luna`, `gpt-5.6-terra`, and `gpt-5.6-sol` with function tools and reasoning.
+- Converted conversation message histories into typed Responses API input items, including multimodal image and text content, function calls, and function call outputs.
+- Transformed tool definitions into internally tagged function specifications and configured stateless execution (`store: false`).
+- Added streamed event parsing for typed SSE response events, including token deltas and incremental tool call arguments.
+
+### 🎨 Settings
+
+- Updated manual model ID placeholders for OpenAI to recommend `gpt-5.6-luna`, `gpt-5.6-terra`, and `gpt-5.6-sol`.
+
 ## 1.2.1 - September 4, 2026
 
 ### 🐛 Fixes

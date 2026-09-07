@@ -832,7 +832,11 @@ export function SettingsPanel({
               <input
                 value={draftProvider.defaultModelId}
                 onChange={(event) => updateDraft({ defaultModelId: event.target.value })}
-                placeholder="e.g. gpt-4o-mini"
+                placeholder={
+                  draftProvider.type === "openai"
+                    ? "e.g. gpt-5.6-luna, gpt-5.6-terra, gpt-5.6-sol"
+                    : "e.g. gpt-4o-mini"
+                }
               />
             </label>
             <div className="settings-actions">

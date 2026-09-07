@@ -1,5 +1,10 @@
 import type { ChatMessage, ToolCallEvent } from "../conversation/types";
-import { streamOpenAIChatCompletion, toOpenAIWireMessages, type StreamedToolCall } from "./openAIChatStream";
+import {
+  streamOpenAIResponse,
+  toOpenAIResponsesInput,
+  toOpenAIResponsesTools,
+  type StreamedResponsesToolCall,
+} from "./openAIResponsesStream";
 import type { ChatProvider, ProviderCompleteInput, ProviderModel, ProviderResponse } from "./types";
 
 type Fetcher = typeof fetch;
@@ -54,12 +59,12 @@ function toolCallRisk(toolName: string): ToolCallEvent["risk"] {
   return "read";
 }
 
-function normalizeToolCall(toolCall: StreamedToolCall): ToolCallEvent {
+function normalizeToolCall(toolCall: StreamedResponsesToolCall): ToolCallEvent {
   const toolName = toolCall.function?.name ?? "unknown_tool";
   const rawArguments = toolCall.function?.arguments ?? "{}";
 
   return {
-    id: toolCall.id ?? crypto.randomUUID(),
+    id: toolCall.call_id ?? toolCall.id ?? crypto.randomUUID(),
     serverName: "OpenAI",
     toolName,
     status: "queued",
@@ -115,15 +120,17 @@ export function createOpenAIProvider(config: OpenAIProviderConfig): ChatProvider
         }));
     },
     async complete(input: ProviderCompleteInput): Promise<ProviderResponse> {
-      const result = await streamOpenAIChatCompletion({
+      const tools = toOpenAIResponsesTools(input.tools);
+      const result = await streamOpenAIResponse({
         fetcher,
-        url: `${baseUrl}/chat/completions`,
+        url: `${baseUrl}/responses`,
         headers: { Authorization: `Bearer ${config.apiKey}` },
         body: {
           model: config.model,
-          messages: toOpenAIWireMessages(input.messages),
+          input: toOpenAIResponsesInput(input.messages),
           stream: true,
-          ...(input.tools?.length ? { tools: input.tools } : {}),
+          store: false,
+          ...(tools?.length ? { tools } : {}),
         },
         signal: input.signal,
         errorPrefix: "OpenAI provider request failed",

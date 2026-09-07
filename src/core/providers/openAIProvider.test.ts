@@ -7,8 +7,14 @@ function sseResponse(chunks: unknown[], status = 200): Response {
 }
 
 describe("openAI provider", () => {
-  test("posts normalized chat messages to the OpenAI chat completions endpoint", async () => {
-    const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: { content: "Hello from OpenAI." } }] }]));
+  test("posts normalized chat messages to the OpenAI responses endpoint", async () => {
+    const fetcher = vi.fn(async () =>
+      sseResponse([
+        { type: "response.created" },
+        { type: "response.output_text.delta", delta: "Hello from OpenAI." },
+        { type: "response.completed" },
+      ]),
+    );
     const provider = createOpenAIProvider({
       apiKey: "test-key",
       model: "gpt-4o-mini",
@@ -27,7 +33,7 @@ describe("openAI provider", () => {
     });
 
     expect(fetcher).toHaveBeenCalledWith(
-      "https://api.openai.com/v1/chat/completions",
+      "https://api.openai.com/v1/responses",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -36,8 +42,9 @@ describe("openAI provider", () => {
         }),
         body: JSON.stringify({
           model: "gpt-4o-mini",
-          messages: [{ role: "user", content: "Hello" }],
+          input: [{ role: "user", content: "Hello" }],
           stream: true,
+          store: false,
         }),
       }),
     );
@@ -48,9 +55,10 @@ describe("openAI provider", () => {
   test("streams incremental content deltas as they arrive", async () => {
     const fetcher = vi.fn(async () =>
       sseResponse([
-        { choices: [{ delta: { content: "Hel" } }] },
-        { choices: [{ delta: { content: "lo " } }] },
-        { choices: [{ delta: { content: "there." } }] },
+        { type: "response.output_text.delta", delta: "Hel" },
+        { type: "response.output_text.delta", delta: "lo " },
+        { type: "response.output_text.delta", delta: "there." },
+        { type: "response.completed" },
       ]),
     );
     const provider = createOpenAIProvider({
@@ -69,26 +77,34 @@ describe("openAI provider", () => {
     expect(response.message.content).toBe("Hello there.");
   });
 
-  test("normalizes tool calls from OpenAI chat responses", async () => {
+  test("normalizes tool calls from OpenAI responses", async () => {
     const fetcher = vi.fn(async () =>
       sseResponse([
         {
-          choices: [
-            {
-              delta: {
-                tool_calls: [{ index: 0, id: "call-1", function: { name: "read_plan", arguments: "" } }],
-              },
-            },
-          ],
+          type: "response.output_item.added",
+          output_index: 0,
+          item: {
+            type: "function_call",
+            id: "fc-1",
+            call_id: "call-1",
+            name: "read_plan",
+            arguments: "",
+          },
         },
         {
-          choices: [
-            {
-              delta: {
-                tool_calls: [{ index: 0, function: { arguments: "{\"path\":\"PLAN.md\"}" } }],
-              },
-            },
-          ],
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          delta: '{"path":"PLAN.md"}',
+        },
+        {
+          type: "response.function_call_arguments.done",
+          output_index: 0,
+          call_id: "call-1",
+          name: "read_plan",
+          arguments: '{"path":"PLAN.md"}',
+        },
+        {
+          type: "response.completed",
         },
       ]),
     );
@@ -110,7 +126,9 @@ describe("openAI provider", () => {
   });
 
   test("includes the tools schema in the request body when tools are provided", async () => {
-    const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: { content: "ok" } }] }]));
+    const fetcher = vi.fn(async () =>
+      sseResponse([{ type: "response.output_text.delta", delta: "ok" }]),
+    );
     const provider = createOpenAIProvider({
       apiKey: "test-key",
       model: "gpt-4o-mini",
@@ -124,11 +142,15 @@ describe("openAI provider", () => {
 
     const [, requestInit] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     const body = JSON.parse(requestInit.body as string);
-    expect(body.tools).toEqual([{ type: "function", function: { name: "echo", description: "Echoes input", parameters: {} } }]);
+    expect(body.tools).toEqual([
+      { type: "function", name: "echo", description: "Echoes input", parameters: {}, strict: false },
+    ]);
   });
 
-  test("serializes an assistant tool-call message and its tool result with matching tool_call_id", async () => {
-    const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: { content: "ok" } }] }]));
+  test("serializes an assistant tool-call message and its tool result with matching call_id", async () => {
+    const fetcher = vi.fn(async () =>
+      sseResponse([{ type: "response.output_text.delta", delta: "ok" }]),
+    );
     const provider = createOpenAIProvider({
       apiKey: "test-key",
       model: "gpt-4o-mini",
@@ -140,7 +162,7 @@ describe("openAI provider", () => {
         {
           id: "assistant-1",
           role: "assistant",
-          content: "",
+          content: "Creating notes",
           createdAt: "2026-07-11T00:00:00.000Z",
           toolCalls: [
             {
@@ -166,13 +188,15 @@ describe("openAI provider", () => {
 
     const [, requestInit] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
     const body = JSON.parse(requestInit.body as string);
-    expect(body.messages).toEqual([
+    expect(body.input).toEqual([
+      { role: "assistant", content: "Creating notes" },
       {
-        role: "assistant",
-        content: null,
-        tool_calls: [{ id: "call-1", type: "function", function: { name: "create_artifact", arguments: '{"title":"Notes"}' } }],
+        type: "function_call",
+        call_id: "call-1",
+        name: "create_artifact",
+        arguments: '{"title":"Notes"}',
       },
-      { role: "tool", tool_call_id: "call-1", content: "Artifact created." },
+      { type: "function_call_output", call_id: "call-1", output: "Artifact created." },
     ]);
   });
 
@@ -196,6 +220,9 @@ describe("openAI provider", () => {
           data: [
             { id: "gpt-4o-mini" },
             { id: "gpt-4o" },
+            { id: "gpt-5.6-luna" },
+            { id: "gpt-5.6-terra" },
+            { id: "gpt-5.6-sol" },
             { id: "text-embedding-3-small" },
             { id: "whisper-1" },
             { id: "tts-1" },
@@ -227,11 +254,19 @@ describe("openAI provider", () => {
         headers: expect.objectContaining({ Authorization: "Bearer test-key" }),
       }),
     );
-    expect(models?.map((model) => model.id)).toEqual(["gpt-4o-mini", "gpt-4o"]);
+    expect(models?.map((model) => model.id)).toEqual([
+      "gpt-4o-mini",
+      "gpt-4o",
+      "gpt-5.6-luna",
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+    ]);
   });
 
   test("allows overriding the base URL", async () => {
-    const fetcher = vi.fn(async () => sseResponse([{ choices: [{ delta: {} }] }]));
+    const fetcher = vi.fn(async () =>
+      sseResponse([{ type: "response.output_text.delta", delta: "" }]),
+    );
     const provider = createOpenAIProvider({
       apiKey: "test-key",
       model: "gpt-4o-mini",
@@ -241,6 +276,6 @@ describe("openAI provider", () => {
 
     await provider.complete({ messages: [] });
 
-    expect(fetcher).toHaveBeenCalledWith("https://proxy.example.com/v1/chat/completions", expect.anything());
+    expect(fetcher).toHaveBeenCalledWith("https://proxy.example.com/v1/responses", expect.anything());
   });
 });
