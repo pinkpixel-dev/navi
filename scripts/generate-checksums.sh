@@ -12,15 +12,17 @@ if [ ! -d "$BUNDLE_DIR" ]; then
   exit 1
 fi
 
+VERSION="${3:-$(node -p "require('./package.json').version")}"
+
 # Collect the artifacts users actually download.
 mapfile -t artifacts < <(find "$BUNDLE_DIR" -type f \( \
-  -name '*.AppImage' -o \
-  -name '*.deb' -o \
-  -name '*.rpm' -o \
-  -name '*.dmg' -o \
-  -name '*.app.tar.gz' -o \
-  -name '*.msi' -o \
-  -name '*.exe' \) | sort)
+  -name "*${VERSION}*.AppImage" -o \
+  -name "*${VERSION}*.deb" -o \
+  -name "*${VERSION}*.rpm" -o \
+  -name "*${VERSION}*.dmg" -o \
+  -name "*${VERSION}*.app.tar.gz" -o \
+  -name "*${VERSION}*.msi" -o \
+  -name "*${VERSION}*.exe" \) | sort)
 
 if [ "${#artifacts[@]}" -eq 0 ]; then
   echo "No installers found under $BUNDLE_DIR." >&2
